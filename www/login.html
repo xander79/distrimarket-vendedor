@@ -1,0 +1,214 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>DISTRIMARKET - Iniciar Sesión</title>
+<link rel="stylesheet" href="estilos.css">
+<style>
+html,body{height:100%;margin:0}
+body.login-body{font-family:'Segoe UI',Tahoma,Geneva,Verdana,sans-serif;background:linear-gradient(135deg,#667eea 0%,#764ba2 100%) !important;display:flex !important;align-items:center;justify-content:center;padding:20px;color:var(--color-text,#e8eaf2);visibility:visible !important}
+.login-card{background:var(--color-bg-card,#1e2130);width:100%;max-width:440px;border-radius:16px;padding:30px 26px;box-shadow:0 20px 50px rgba(0,0,0,.45);border:1px solid var(--color-border,#363b52);animation:loginIn .35s ease;display:block !important;visibility:visible !important}
+@keyframes loginIn{from{opacity:0;transform:translateY(12px)}to{opacity:1;transform:translateY(0)}}
+.login-card h2{text-align:center;margin:4px 0 2px;font-size:22px;color:var(--color-text,#e8eaf2)}
+.login-card .login-tagline{text-align:center;color:var(--color-text-light,#a7adc4);font-size:13px;margin-bottom:18px}
+.login-field{margin-bottom:14px}
+.login-field label{display:block;font-size:13px;font-weight:600;margin-bottom:6px;color:var(--color-text,#e8eaf2)}
+.login-field input{width:100%;padding:12px 14px;border:1px solid var(--color-border,#363b52);border-radius:10px;font-size:14px;box-sizing:border-box;background:var(--color-bg-card-2,#262a3d);color:var(--color-text,#e8eaf2)}
+.login-field input::placeholder{color:var(--color-text-light,#a7adc4);opacity:.8}
+.login-field input:focus{outline:none;border-color:var(--color-primary,#7c8ff0);box-shadow:0 0 0 3px rgba(124,143,240,.25);background:var(--color-bg-card-2,#262a3d)}
+.login-btn{width:100%;padding:13px;border:none;border-radius:10px;cursor:pointer;background:linear-gradient(135deg,#667eea 0%,#764ba2 100%);color:#fff;font-size:15px;font-weight:700;margin-top:6px}
+.login-btn:hover{transform:translateY(-2px);box-shadow:0 8px 20px rgba(102,126,234,.4)}
+.login-btn:disabled{opacity:.7;cursor:wait}
+.login-error{display:none;background:rgba(240,87,106,.15);color:var(--color-danger,#f0576a);border:1px solid rgba(240,87,106,.4);padding:10px 12px;border-radius:8px;font-size:13px;margin-bottom:14px;text-align:center}
+.login-hint{margin-top:14px;padding:10px 12px;background:rgba(124,143,240,.12);border:1px dashed rgba(124,143,240,.5);border-radius:8px;font-size:12px;color:var(--color-text-light,#a7adc4);text-align:center}
+.login-hint code{background:var(--color-bg-card-2,#262a3d);color:var(--color-text,#e8eaf2);padding:1px 6px;border-radius:4px;font-weight:700}
+.login-logo-link{display:block;text-align:center;margin-top:12px;font-size:12px;color:var(--color-text-light,#a7adc4);cursor:pointer;text-decoration:none}
+.login-logo-link:hover{color:var(--color-primary,#7c8ff0);text-decoration:underline}
+.login-foot{position:fixed;bottom:12px;left:0;right:0;text-align:center;font-size:11px;color:rgba(255,255,255,.85)}
+.login-card .le-login-logo{margin-bottom:10px}
+.login-card .le-login-logo .le-login-name{color:var(--color-text,#e8eaf2)}
+.login-card .le-login-logo .le-login-sub{color:var(--color-text-light,#a7adc4)}
+    /* Aviso de sesión activa (reemplaza el rebote automático) */
+    .sesion-activa{display:none;background:rgba(62,207,114,.12);border:1px solid rgba(62,207,114,.35);border-left:4px solid var(--color-success,#3ecf72);border-radius:10px;padding:14px;margin-bottom:16px}
+    .sesion-activa h3{margin:0 0 4px;font-size:14px;color:var(--color-success,#3ecf72);display:flex;align-items:center;gap:6px}
+    .sesion-activa p{margin:0 0 10px;font-size:12px;color:var(--color-text-light,#a7adc4)}
+    .sesion-activa .sa-btns{display:flex;gap:8px;flex-wrap:wrap}
+    .sa-btns button{flex:1;min-width:140px;padding:9px 12px;border:none;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer}
+    .sa-go{background:var(--color-success,#3ecf72);color:#0e1a12}
+    .sa-go:hover{background:#34b863}
+    .sa-out{background:var(--color-bg-card-2,#262a3d);color:var(--color-danger,#f0576a);border:1px solid rgba(240,87,106,.4) !important}
+    .sa-out:hover{background:rgba(240,87,106,.15)}
+
+    /* Botón de escape siempre visible */
+    .login-escape{display:flex;align-items:center;justify-content:center;gap:6px;width:100%;margin-top:12px;padding:10px;border:1px dashed rgba(240,87,106,.4);border-radius:8px;background:rgba(240,87,106,.08);color:var(--color-danger,#f0576a);font-size:12px;font-weight:600;cursor:pointer;text-decoration:none}
+    .login-escape:hover{background:rgba(240,87,106,.15)}
+
+    details.diag{margin-top:14px;font-size:11px;color:var(--color-text-light,#a7adc4);background:var(--color-bg-card-2,#262a3d);border:1px solid var(--color-border,#363b52);border-radius:8px;padding:8px 10px}
+    details.diag summary{cursor:pointer;font-weight:600;color:var(--color-text,#e8eaf2)}
+    details.diag .row{display:flex;justify-content:space-between;padding:3px 0;border-bottom:1px dashed var(--color-border,#363b52)}
+    details.diag .ok{color:var(--color-success,#3ecf72);font-weight:700}
+    details.diag .no{color:var(--color-danger,#f0576a);font-weight:700}
+    @media (max-width:480px){.login-card{padding:22px 16px}}
+</style>
+</head>
+<body class="login-body">
+<div class="login-card" id="loginCard">
+<div id="loginLogoArea"></div>
+<h2>Iniciar Sesión</h2>
+<p class="login-tagline">Sistema de gestión DISTRIMARKET</p>
+    <!-- ✅ Aviso de sesión activa (YA NO te rebota: tú decides) -->
+    <div class="sesion-activa" id="sesionActiva">
+        <h3>✅ Ya hay una sesión guardada</h3>
+        <p>Estás identificado como <strong id="saNombre">—</strong>. El sistema te mandaba directo al menú por esto. Elige qué hacer:</p>
+        <div class="sa-btns">
+            <button type="button" class="sa-go" id="saGo">🚀 Ir al dashboard</button>
+            <button type="button" class="sa-out" id="saOut">🚪 Cerrar esta sesión</button>
+        </div>
+    </div>
+
+    <div class="login-error" id="loginError"></div>
+
+    <form id="loginForm" autocomplete="on" onsubmit="return false;">
+        <div class="login-field">
+            <label for="loginUser">Usuario o Email</label>
+            <input type="text" id="loginUser" name="usuario" placeholder="admin" autofocus>
+        </div>
+        <div class="login-field">
+            <label for="loginPass">Contraseña</label>
+            <input type="password" id="loginPass" name="password" placeholder="••••••••">
+        </div>
+        <button type="submit" class="login-btn" id="loginBtn">Entrar</button>
+    </form>
+
+    <div class="login-hint" id="loginHint">Acceso por defecto: <code>admin</code> / <code>admin123</code></div>
+
+    <a class="login-logo-link" id="loginLogoLink" title="Subir o cambiar el logo de la empresa">🖼️ Configurar logo de la empresa</a>
+
+    <!-- ✅ Siempre visible: por si quedaste atascado -->
+    <a class="login-escape" id="loginEscape" title="Borra cualquier sesión guardada y recarga el login">🧹 Limpiar sesión guardada y reintentar</a>
+
+    <details class="diag" id="diagBox">
+        <summary>🔧 Diagnóstico (si algo falla, mira esto)</summary>
+        <div class="row"><span>Sesión guardada (dm_user)</span><span id="dDm" class="no">—</span></div>
+        <div class="row"><span>Perfil (user)</span><span id="dUser" class="no">—</span></div>
+        <div class="row"><span>Usuarios registrados</span><span id="dUsers">—</span></div>
+        <div class="row"><span>Logo cargado</span><span id="dLogo" class="no">—</span></div>
+        <div style="margin-top:6px;color:var(--color-text-light,#a7adc4);">Si “Sesión guardada” dice SÍ, por eso te mandaba al menú: usa “Cerrar esta sesión” o “Limpiar sesión guardada” para que te pida clave.</div>
+    </details>
+</div>
+
+<div class="login-foot">© <span id="loginYear"></span> DISTRIMARKET · Todos los derechos reservados</div>
+
+<script src="logo-empresa.js?v=20260720" onerror="console.warn('[login] logo-empresa.js no encontrado (ok)')"></script>
+
+<script>
+/* LOGIN AUTÓNOMO. Regla única de sesión: 'dm_user'.
+   CAMBIO CLAVE: NUNCA redirige solo. Si hay sesión, muestra el aviso y TÚ decides. */
+(function () {
+    'use strict';
+    var SESSION_KEY='dm_user', PROFILE_KEY='user', USERS_KEY='usuariosSistema';
+
+    function raw(k){ try{ return localStorage.getItem(k); }catch(e){ return null; } }
+    function parseObj(k){ try{ var v=raw(k); if(!v) return null; var o=JSON.parse(v); return (o&&typeof o==='object'&&(o.email||o.nombre||o.usuario))?o:null; }catch(e){ return null; } }
+    function setBoth(o){ var j=JSON.stringify(o); try{ localStorage.setItem(SESSION_KEY,j); localStorage.setItem(PROFILE_KEY,j); }catch(e){} }
+    function clearBoth(){ try{ localStorage.removeItem(SESSION_KEY); localStorage.removeItem(PROFILE_KEY); }catch(e){} }
+    function getUsers(){ try{ var u=JSON.parse(raw(USERS_KEY)); return Array.isArray(u)?u:null; }catch(e){ return null; } }
+    function setUsers(a){ try{ localStorage.setItem(USERS_KEY,JSON.stringify(a)); }catch(e){} }
+    function ensureDefault(){ var l=getUsers(); if(!l||!l.length){ l=[{usuario:'admin',email:'admin@distrimarket.com',password:'admin123',nombre:'Administrador',rol:'admin'}]; setUsers(l);} return l; }
+
+    function authenticate(u,p){ var l=ensureDefault(); u=String(u||'').trim(); p=String(p||''); if(!u||!p) return null; for(var i=0;i<l.length;i++){ var x=l[i]; var m=(x.usuario&&x.usuario.toLowerCase()===u.toLowerCase())||(x.email&&x.email.toLowerCase()===u.toLowerCase()); if(m&&x.password===p) return {email:x.email||u,nombre:x.nombre||x.usuario||u,rol:x.rol||'admin',usuario:x.usuario||u}; } return null; }
+
+    function showError(m){ var e=document.getElementById('loginError'); e.textContent=m; e.style.display='block'; }
+    function hideError(){ var e=document.getElementById('loginError'); e.textContent=''; e.style.display='none'; }
+
+    function doLogin(){
+        hideError();
+        var u=document.getElementById('loginUser').value, p=document.getElementById('loginPass').value, b=document.getElementById('loginBtn');
+        if(!u||!p){ showError('⚠️ Escribe usuario y contraseña.'); return; }
+        var s=authenticate(u,p);
+        if(!s){ showError('❌ Usuario o contraseña incorrectos.'); return; }
+        b.disabled=true; b.textContent='Entrando...';
+        setBoth(s);
+        setTimeout(function(){ window.location.href='index.html'; },250);
+    }
+
+    // Muestra el aviso de sesión activa (sin redirigir)
+    function mostrarSesionActiva(dm){
+        var box=document.getElementById('sesionActiva');
+        var nm=document.getElementById('saNombre');
+        if(nm) nm.textContent = dm.nombre || dm.usuario || dm.email || 'Usuario';
+        if(box) box.style.display='block';
+    }
+    function ocultarSesionActiva(){
+        var box=document.getElementById('sesionActiva'); if(box) box.style.display='none';
+    }
+
+    function pintarDiag(){
+        try{
+            var dm=parseObj(SESSION_KEY), us=parseObj(PROFILE_KEY), list=getUsers();
+            var set=function(id,txt,ok){ var e=document.getElementById(id); if(e){ e.textContent=txt; e.className=ok?'ok':'no'; } };
+            set('dDm', dm?('SÍ · '+(dm.nombre||dm.usuario||dm.email)):'NO', !!dm);
+            set('dUser', us?('SÍ · '+(us.nombre||us.usuario||us.email)):'NO', !!us);
+            var eu=document.getElementById('dUsers'); if(eu) eu.textContent=(list?list.length:0)+' (ej: admin)';
+            set('dLogo', window.LogoEmpresa?'SÍ':'NO', !!window.LogoEmpresa);
+        }catch(e){}
+    }
+
+    function ensureVisible(){
+        try{
+            var c=document.getElementById('loginCard');
+            if(c){ var cs=getComputedStyle(c); if(cs.display==='none'||cs.visibility==='hidden'||c.offsetParent===null){ c.style.cssText+=';display:block!important;visibility:visible!important;position:relative!important;z-index:99999!important;'; } }
+        }catch(e){}
+    }
+
+    function init(){
+        try{ document.getElementById('loginYear').textContent=new Date().getFullYear(); }catch(e){}
+        ensureVisible(); setTimeout(ensureVisible,300);
+
+        ensureDefault();
+
+        // ✅ Si hay sesión guardada: AVISO (no rebote). Si no: formulario limpio.
+        var dm = parseObj(SESSION_KEY);
+        if (dm) {
+            mostrarSesionActiva(dm);
+            console.log('[LOGIN] sesión guardada detectada -> muestro aviso (sin redirigir): ' + (dm.nombre||dm.usuario||dm.email));
+        } else {
+            ocultarSesionActiva();
+            try{ localStorage.removeItem(PROFILE_KEY); }catch(e){} // limpia perfil huérfano
+        }
+
+        // Botones del aviso
+        var go=document.getElementById('saGo'); if(go) go.addEventListener('click',function(){ window.location.href='index.html'; });
+        var out=document.getElementById('saOut'); if(out) out.addEventListener('click',function(){
+            clearBoth(); ocultarSesionActiva(); hideError(); pintarDiag();
+            var u=document.getElementById('loginUser'); if(u){ u.value=''; u.focus(); }
+            var p=document.getElementById('loginPass'); if(p) p.value='';
+            try{ if(window.Notif&&Notif.info) Notif.info('Sesión cerrada. Ya puedes entrar con otra cuenta.'); }catch(e){}
+        });
+
+        // Formulario
+        // NOTA: el botón #loginBtn es type="submit" dentro de #loginForm, así que un click
+        // ya dispara el evento 'submit' del formulario (manejado abajo). Antes había además
+        // un listener 'click' directo en el botón que llamaba a doLogin(), duplicando la
+        // ejecución (doLogin() corría dos veces por cada click: autenticación doble,
+        // doble escritura en localStorage y dos setTimeout de redirección). Se elimina ese
+        // listener redundante; el submit del formulario cubre tanto el click como Enter.
+        var form=document.getElementById('loginForm'); if(form) form.addEventListener('submit',function(e){ e.preventDefault(); doLogin(); });
+        ['loginUser','loginPass'].forEach(function(id){ var el=document.getElementById(id); if(el) el.addEventListener('keydown',function(e){ if(e.key==='Enter'){ e.preventDefault(); doLogin(); } }); });
+
+        var link=document.getElementById('loginLogoLink'); if(link) link.addEventListener('click',function(e){ e.preventDefault(); if(window.LogoEmpresa&&typeof LogoEmpresa.openPicker==='function') LogoEmpresa.openPicker(); else alert('Gestor de logo no disponible (falta logo-empresa.js).'); });
+
+        var esc=document.getElementById('loginEscape'); if(esc) esc.addEventListener('click',function(e){ e.preventDefault(); clearBoth(); location.reload(); });
+
+        var list=getUsers(); var onlyDefault=list&&list.length===1&&list[0].usuario==='admin';
+        var hint=document.getElementById('loginHint'); if(hint&&!onlyDefault) hint.style.display='none';
+
+        pintarDiag();
+        console.log('%c[LOGIN] listo ✅','color:#28a745;font-weight:bold',{ url:location.href, usuarios:(list||[]).length, logo:!!window.LogoEmpresa, sesionGuardada:!!dm });
+    }
+    if(document.readyState==='loading') document.addEventListener('DOMContentLoaded',init); else init();
+})();
+</script>
+</body>
+</html>
