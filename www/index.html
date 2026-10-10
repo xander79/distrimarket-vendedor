@@ -9,6 +9,8 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@500;600;700;800&family=Noto+Color+Emoji&display=swap" rel="stylesheet">
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js" onerror="window.__noChart=true"></script>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" onerror="window.__noLeafletCss=true">
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" onerror="window.__noLeaflet=true"></script>
 <script>
 /* ===== Capa autónoma (DB / Notif / Format) ===== */
 (function(){'use strict';
@@ -203,7 +205,7 @@ body.dark .toast-demo{color:#fbbf24}
 <div class="sub">App Vendedor · toma pedidos en segundos</div>
 </div>
 <div class="hbtns">
-<button class="hbtn" id="darkBtn" title="Modo oscuro">🌙</button>
+<button class="hbtn" id="darkBtn" data-act="toggleDark" title="Modo oscuro">🌙</button>
 <button class="hbtn" data-act="go" data-go="mas" title="Menú completo">☰</button>
 </div>
 </div>
@@ -308,12 +310,48 @@ body.dark .toast-demo{color:#fbbf24}
 <div class="kpi ok reveal"><div class="l">Con saldo</div><div class="v" id="cSaldo">0</div></div>
 <div class="kpi acc reveal"><div class="l">Deuda total</div><div class="v" id="cDeuda">$0</div></div>
 </div>
+<button class="btn brand block" data-act="toggleNuevoCli" id="btnToggleNuevoCli" style="margin-bottom:10px">➕ Nuevo cliente</button>
+<div class="card" id="formNuevoCliente" style="display:none">
+<div class="sec-t" style="margin-top:0"><span class="e">➕</span> Registrar cliente nuevo</div>
+<div class="field"><label>Nombre / Tienda <b style="color:var(--accent)">*</b></label><input type="text" id="nvNombre" placeholder="Nombre del negocio o persona"></div>
+<div class="row2">
+<div class="field" style="margin:0"><label>Documento</label><input type="text" id="nvDoc" placeholder="Cédula o NIT"></div>
+<div class="field" style="margin:0"><label>Teléfono <b style="color:var(--accent)">*</b></label><input type="text" id="nvTel" placeholder="300 000 0000"></div>
+</div>
+<div class="field"><label>Dirección</label><input type="text" id="nvDir" placeholder="Dirección del negocio"></div>
+<div class="field"><label>Zona</label><input type="text" id="nvZona" placeholder="Norte, Sur, Centro..."></div>
+<div class="field"><label><span class="e">📍</span> Ubicación GPS</label><div style="display:flex;align-items:center;gap:10px"><button class="btn sm info" type="button" data-act="geoNuevoCli" id="btnGeoNuevoCli">📍 Capturar ubicación</button><span id="geoNuevoCliEstado" style="font-size:13px;color:var(--ink2)">Sin ubicación capturada</span></div></div>
+<div class="row2">
+<button class="btn ghost block" data-act="cancelarNuevoCli">Cancelar</button>
+<button class="btn brand block" data-act="guardarNuevoCli">💾 Guardar cliente</button>
+</div>
+</div>
 <div class="field ac">
 <label><span class="e">🔍</span> Buscar cliente</label>
 <input type="text" id="cliSearch2" placeholder="Nombre, cédula o teléfono..." autocomplete="off">
 <div class="ac-list" id="cliResults2"></div>
 </div>
 <div id="listaClientes"></div>
+</section>
+
+<!-- ============ PEDIDOS (buscar por cliente) ============ -->
+<section class="tab" id="t-pedidos">
+<div class="sec-t"><span class="e">🧾</span> Pedidos realizados</div>
+<div class="field ac">
+<label><span class="e">🔍</span> Buscar por cliente</label>
+<input type="text" id="pedBuscar" placeholder="Nombre del cliente..." autocomplete="off">
+</div>
+<div id="listaPedidos"></div>
+</section>
+
+<!-- ============ MAPA ============ -->
+<section class="tab" id="t-mapa">
+<div class="sec-t"><span class="e">🗺️</span> Mapa de clientes</div>
+<div class="card" id="mapaCard">
+<div id="mapaClientes" style="height:360px;border-radius:12px;overflow:hidden;background:var(--line)"></div>
+<div id="mapaAviso" style="display:none;text-align:center;padding:30px 10px;color:var(--ink2)"><div style="font-size:30px">📡</div><p>No se pudo cargar el mapa (necesita internet la primera vez). Los botones "Cómo llegar" en Clientes siguen funcionando.</p></div>
+<div style="font-size:12px;color:var(--ink2);margin-top:10px">Solo se muestran los clientes que ya tienen ubicación GPS capturada por un administrador en Clientes.</div>
+</div>
 </section>
 
 <!-- ============ VISITAS ============ -->
@@ -331,8 +369,9 @@ body.dark .toast-demo{color:#fbbf24}
 </div>
 <div class="row2">
 <div class="field" style="margin:0"><label>Tipo</label><select id="visTipo"><option value="Venta">🛒 Venta</option><option value="Cobro">💳 Cobro</option><option value="Prospección">🔍 Prospección</option><option value="Seguimiento">📞 Seguimiento</option></select></div>
-<div class="field" style="margin:0"><label>Resultado</label><select id="visRes"><option value="Exitosa">✅ Exitosa</option><option value="Pendiente">⏳ Pendiente</option><option value="No encontrado">❌ No encontrado</option></select></div>
+<div class="field" style="margin:0"><label>Resultado</label><select id="visRes"><option value="Exitosa">✅ Exitosa</option><option value="Pendiente">⏳ Pendiente</option><option value="No encontrado">❌ No encontrado</option><option value="No compró">🚫 No compró</option></select></div>
 </div>
+<div class="field" id="wrapVisMotivo" style="display:none"><label>Motivo de no compra</label><select id="visMotivo"><option value="Ya tiene inventario">📦 Ya tiene inventario</option><option value="No tiene dinero">💸 No tiene dinero</option><option value="Estaba cerrado">🔒 Estaba cerrado</option><option value="No le interesó">🙅 No le interesó</option><option value="No se encontró al encargado">👤 No se encontró al encargado</option><option value="Otro">✏️ Otro</option></select></div>
 <div class="row2">
 <div class="field" style="margin:0"><label>Hora</label><input type="time" id="visHora"></div>
 <div class="field" style="margin:0"><label><span class="e">📍</span> GPS</label><button class="btn sm info block" data-act="gps" id="gpsBtn">Capturar</button></div>
@@ -368,6 +407,8 @@ body.dark .toast-demo{color:#fbbf24}
 <div class="mitem c1" data-act="go" data-go="dashboard"><div class="e">📊</div><div class="tx"><div class="l">Dashboard</div><div class="d">Tu día en números</div></div><span class="live acc" id="m-ventas">$0</span></div>
 <div class="mitem c2" data-act="go" data-go="pedido"><div class="e">🛒</div><div class="tx"><div class="l">Pedido</div><div class="d">Toma uno rápido</div></div><span class="live" id="m-carrito">0</span></div>
 <div class="mitem c3" data-act="go" data-go="clientes"><div class="e">👥</div><div class="tx"><div class="l">Clientes</div><div class="d">Busca y gestiona</div></div><span class="live vio" id="m-clientes">0</span></div>
+<div class="mitem c6" data-act="go" data-go="pedidos"><div class="e">🧾</div><div class="tx"><div class="l">Pedidos</div><div class="d">Busca por cliente</div></div><span class="live" id="m-pedidos">0</span></div>
+<div class="mitem c4" data-act="go" data-go="mapa"><div class="e">🗺️</div><div class="tx"><div class="l">Mapa</div><div class="d">Ubicación de clientes</div></div></div>
 <div class="mitem c4" data-act="go" data-go="visitas"><div class="e">📍</div><div class="tx"><div class="l">Visitas</div><div class="d">Registra tu ruta</div></div><span class="live warn" id="m-visitas">0</span></div>
 <div class="mitem c5" data-act="go" data-go="metas"><div class="e">🎯</div><div class="tx"><div class="l">Metas</div><div class="d">Comisiones y ranking</div></div><span class="live vio" id="m-cump">0%</span></div>
 <div class="mitem c6" data-act="go" data-go="perfil"><div class="e">👤</div><div class="tx"><div class="l">Perfil</div><div class="d">Tu información</div></div></div>
@@ -423,6 +464,18 @@ body.dark .toast-demo{color:#fbbf24}
 </div>
 </div>
 
+<div class="modal" id="modalDevolucion">
+<div class="sheet">
+<h3><span class="e">↩️</span> Registrar devolución <button class="x" data-act="closeModalDev">×</button></h3>
+<div id="devInfoPedido" style="font-size:13px;color:var(--ink2);margin-bottom:10px"></div>
+<div class="field"><label>Tipo de devolución</label><select id="devTipo"><option value="total">↩️ Total (todo el pedido)</option><option value="parcial">🔸 Parcial (solo una parte)</option></select></div>
+<div class="field" id="wrapDevMonto" style="display:none"><label>Valor devuelto</label><input type="number" id="devMonto" placeholder="$0" min="0"></div>
+<div class="field"><label>Motivo</label><select id="devMotivo2"><option value="Producto defectuoso">Producto defectuoso</option><option value="Producto equivocado">Producto equivocado</option><option value="No gustó al cliente">No gustó al cliente</option><option value="Producto vencido">Producto vencido</option><option value="Otro">Otro</option></select></div>
+<div class="field"><label>Observaciones</label><textarea id="devObs2" rows="2"></textarea></div>
+<button class="btn brand block" data-act="guardarDevolucion">💾 Guardar devolución</button>
+</div>
+</div>
+
 <script>
 /* =====================================================================
 APP VENDEDOR · lógica
@@ -432,6 +485,31 @@ var clientes = DB.get('clientes', []);
 var ventas = DB.get('ventasV', []);
 var visitas = DB.get('visitasV', []);
 var meta = DB.get('metaV', 5000000);
+/* Los clientes que se crean desde Administración (clientes.html) usan nombres de campo
+   distintos (documento, telefono, direccion, totalCompras...) a los que usa esta app
+   (doc, tel, dir, total...). Esto normaliza esos clientes para que se vean bien aquí,
+   y de una vez guarda ambos nombres para que tampoco se pierdan datos del otro lado. */
+function normalizarClientes(){
+var cambio=false;
+clientes.forEach(function(c){
+if(c.doc===undefined&&c.documento!==undefined){c.doc=c.documento;cambio=true;}
+if(c.documento===undefined&&c.doc!==undefined){c.documento=c.doc;cambio=true;}
+if(c.tel===undefined&&c.telefono!==undefined){c.tel=c.telefono;cambio=true;}
+if(c.telefono===undefined&&c.tel!==undefined){c.telefono=c.tel;cambio=true;}
+if(c.dir===undefined&&c.direccion!==undefined){c.dir=c.direccion;cambio=true;}
+if(c.direccion===undefined&&c.dir!==undefined){c.direccion=c.dir;cambio=true;}
+if(c.compras===undefined&&c.cantidadCompras!==undefined){c.compras=c.cantidadCompras;cambio=true;}
+if(c.total===undefined&&c.totalCompras!==undefined){c.total=c.totalCompras;cambio=true;}
+if(c.ultima===undefined&&c.ultimaCompra!==undefined){c.ultima=c.ultimaCompra;cambio=true;}
+if(c.fav===undefined){c.fav=false;cambio=true;}
+if(c.compras===undefined){c.compras=0;cambio=true;}
+if(c.total===undefined){c.total=0;cambio=true;}
+if(c.saldo===undefined){c.saldo=0;cambio=true;}
+if(c.zona===undefined){c.zona='';cambio=true;}
+});
+if(cambio)DB.set('clientes',clientes);
+}
+normalizarClientes();
 var pctCom = DB.get('pctComV', 5);
 var carrito = [];
 var cliSel = null;
@@ -454,11 +532,11 @@ DB.set('productos',productos);
 }
 if(clientes.length===0){
 clientes=[
-{id:'C1',nombre:'Tienda La Esquina',doc:'900111111',tel:'3001111111',dir:'Calle 100 #20-30',zona:'Norte',fav:true,compras:15,total:1500000,ultima:'2026-07-25',saldo:150000},
-{id:'C2',nombre:'Minimarket El Parque',doc:'900222222',tel:'3002222222',dir:'Cra 15 #40-50',zona:'Norte',fav:false,compras:8,total:800000,ultima:'2026-07-20',saldo:0},
-{id:'C3',nombre:'Supermercado Central',doc:'900333333',tel:'3003333333',dir:'Av 30 #60-70',zona:'Centro',fav:true,compras:25,total:2500000,ultima:'2026-07-27',saldo:320000},
-{id:'C4',nombre:'Droguería San José',doc:'900444444',tel:'3004444444',dir:'Calle 72 #11-22',zona:'Centro',fav:false,compras:6,total:420000,ultima:'2026-07-18',saldo:0},
-{id:'C5',nombre:'Panadería El Trigal',doc:'900555555',tel:'3005555555',dir:'Cra 7 #85-10',zona:'Norte',fav:true,compras:12,total:980000,ultima:'2026-07-26',saldo:85000}
+{id:'C1',nombre:'Tienda La Esquina',doc:'900111111',tel:'3001111111',dir:'Calle 100 #20-30',zona:'Norte',fav:true,compras:15,total:1500000,ultima:'2026-07-25',saldo:150000,lat:4.7110,lng:-74.0387},
+{id:'C2',nombre:'Minimarket El Parque',doc:'900222222',tel:'3002222222',dir:'Cra 15 #40-50',zona:'Norte',fav:false,compras:8,total:800000,ultima:'2026-07-20',saldo:0,lat:4.6280,lng:-74.0631},
+{id:'C3',nombre:'Supermercado Central',doc:'900333333',tel:'3003333333',dir:'Av 30 #60-70',zona:'Centro',fav:true,compras:25,total:2500000,ultima:'2026-07-27',saldo:320000,lat:4.6097,lng:-74.0817},
+{id:'C4',nombre:'Droguería San José',doc:'900444444',tel:'3004444444',dir:'Calle 72 #11-22',zona:'Centro',fav:false,compras:6,total:420000,ultima:'2026-07-18',saldo:0,lat:4.6533,lng:-74.0586},
+{id:'C5',nombre:'Panadería El Trigal',doc:'900555555',tel:'3005555555',dir:'Cra 7 #85-10',zona:'Norte',fav:true,compras:12,total:980000,ultima:'2026-07-26',saldo:85000,lat:4.6751,lng:-74.0477}
 ];
 DB.set('clientes',clientes);
 }
@@ -507,6 +585,8 @@ var bn=document.querySelectorAll('.bnav button');for(var j=0;j<bn.length;j++){bn
 if(name==='dashboard'){pintarDashboard();}
 if(name==='pedido'){renderProductos();}
 if(name==='clientes'){pintarClientes();}
+if(name==='pedidos'){pintarPedidos();}
+if(name==='mapa'){setTimeout(pintarMapa,80);}
 if(name==='visitas'){pintarVisitas();}
 if(name==='metas'){pintarMetas();}
 if(name==='perfil'){pintarPerfil();}
@@ -646,9 +726,90 @@ $('cSaldo').textContent=clientes.filter(function(c){return (c.saldo||0)>0;}).len
 $('cDeuda').textContent=Format.money(clientes.reduce(function(s,c){return s+(c.saldo||0);},0));
 var c=$('listaClientes');
 if(!lista.length){c.innerHTML='<div class="empty"><div class="e">👥</div><p>Sin clientes</p></div>';return;}
-c.innerHTML=lista.map(function(c){return '<div class="cli-card '+(c.fav?'fav':'')+'"><div class="h"><div><div class="nm">'+c.nombre+'</div><div class="mt">📱 '+c.tel+' · 📍 '+c.dir+'</div></div><button class="star" data-act="fav" data-id="'+c.id+'">'+(c.fav?'⭐':'☆')+'</button></div><div class="st"><div><div class="l">Compras</div><div class="v">'+c.compras+'</div></div><div><div class="l">Total</div><div class="v">'+Format.money(c.total)+'</div></div><div><div class="l">Saldo</div><div class="v" style="color:'+(c.saldo>0?'var(--accent)':'var(--ok)')+'">'+Format.money(c.saldo||0)+'</div></div></div><div style="display:flex;gap:7px;margin-top:10px"><button class="btn sm ok" data-act="waCliId" data-id="'+c.id+'">💬 WhatsApp</button><button class="btn sm ghost" data-act="histCliId" data-id="'+c.id+'">📊 Historial</button><button class="btn sm brand" data-act="pedidoCli" data-id="'+c.id+'">🛒 Pedido</button></div></div>';}).join('');
+c.innerHTML=lista.map(function(c){return '<div class="cli-card '+(c.fav?'fav':'')+'"><div class="h"><div><div class="nm">'+c.nombre+'</div><div class="mt">📱 '+c.tel+' · 📍 '+c.dir+'</div></div><button class="star" data-act="fav" data-id="'+c.id+'">'+(c.fav?'⭐':'☆')+'</button></div><div class="st"><div><div class="l">Compras</div><div class="v">'+c.compras+'</div></div><div><div class="l">Total</div><div class="v">'+Format.money(c.total)+'</div></div><div><div class="l">Saldo</div><div class="v" style="color:'+(c.saldo>0?'var(--accent)':'var(--ok)')+'">'+Format.money(c.saldo||0)+'</div></div></div><div style="display:flex;gap:7px;margin-top:10px;flex-wrap:wrap"><button class="btn sm ok" data-act="waCliId" data-id="'+c.id+'">💬 WhatsApp</button><button class="btn sm ghost" data-act="histCliId" data-id="'+c.id+'">📊 Historial</button><button class="btn sm brand" data-act="pedidoCli" data-id="'+c.id+'">🛒 Pedido</button><button class="btn sm info" data-act="comoLlegar" data-id="'+c.id+'">🗺️ Cómo llegar</button></div></div>';}).join('');
 }
 function pintarClientes(){pintarListaClientes();}
+
+var mapaInst=null,mapaMarcadores=[];
+function pintarMapa(){
+if(typeof L==='undefined'||window.__noLeaflet){$('mapaClientes').style.display='none';$('mapaAviso').style.display='block';return;}
+var conGeo=clientes.filter(function(c){return c.lat!=null&&c.lng!=null;});
+if(!conGeo.length){$('mapaClientes').style.display='none';$('mapaAviso').style.display='block';$('mapaAviso').innerHTML='<div style="font-size:30px">📍</div><p>Ningún cliente tiene ubicación GPS todavía. Se captura desde Clientes, en el panel de administración.</p>';return;}
+$('mapaClientes').style.display='block';$('mapaAviso').style.display='none';
+try{
+if(!mapaInst){
+mapaInst=L.map('mapaClientes');
+L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19,attribution:'© OpenStreetMap'}).addTo(mapaInst);
+}
+mapaMarcadores.forEach(function(m){mapaInst.removeLayer(m);});mapaMarcadores=[];
+var bounds=[];
+conGeo.forEach(function(c){
+var mk=L.marker([c.lat,c.lng]).addTo(mapaInst);
+mk.bindPopup('<b>'+c.nombre+'</b><br>'+(c.dir||'')+'<br><a href="https://www.google.com/maps/dir/?api=1&destination='+c.lat+','+c.lng+'" target="_blank">🗺️ Cómo llegar</a>');
+mapaMarcadores.push(mk);bounds.push([c.lat,c.lng]);
+});
+mapaInst.fitBounds(bounds,{padding:[30,30],maxZoom:15});
+setTimeout(function(){if(mapaInst)mapaInst.invalidateSize();},120);
+}catch(e){$('mapaClientes').style.display='none';$('mapaAviso').style.display='block';}
+}
+
+var ESTADO_PEDIDO_LBL={pendiente:['⏳ Pendiente','b-warn'],pagada:['✅ Pagada','b-ok'],entregado:['📦 Entregado','b-ok'],devuelto_parcial:['↩️ Devolución parcial','b-acc'],devuelto_total:['↩️ Devolución total','b-acc']};
+function pintarPedidos(){
+var q=norm($('pedBuscar')?$('pedBuscar').value:'');
+var lista=ventas.slice().reverse();
+if(q)lista=lista.filter(function(v){return norm(v.cliente).indexOf(q)>=0;});
+$('m-pedidos').textContent=ventas.length;
+var c=$('listaPedidos');if(!c)return;
+if(!lista.length){c.innerHTML='<div class="empty"><div class="e">🧾</div><p>'+(q?'No hay pedidos de ese cliente':'Aún no hay pedidos registrados')+'</p></div>';return;}
+c.innerHTML=lista.slice(0,60).map(function(v){
+var e=ESTADO_PEDIDO_LBL[v.estado]||['',v.estado==='pendiente'?'b-warn':'b-ok'];
+var puedeEntregar=(v.estado==='pendiente'||v.estado==='pagada');
+var btns='<div style="display:flex;gap:6px;margin-top:8px;flex-wrap:wrap">'+
+(puedeEntregar?'<button class="btn sm ok" data-act="marcarEntregado" data-id="'+v.id+'">✅ Marcar entregado</button>':'')+
+'<button class="btn sm acc" data-act="abrirDevolucion" data-id="'+v.id+'">↩️ '+(v.devolucion?'Editar devolución':'Registrar devolución')+'</button>'+
+'</div>';
+var devInfo=v.devolucion?('<div class="m" style="color:var(--accent)">↩️ '+(v.devolucion.tipo==='total'?'Total':'Parcial '+Format.money(v.devolucion.monto||0))+' · '+v.devolucion.motivo+(v.devolucion.obs?' · '+v.devolucion.obs:'')+'</div>'):'';
+return '<div class="vitem"><div class="h"><b>'+v.cliente+'</b><span class="badge b-info">'+v.fecha+' · '+v.hora+'</span></div><div class="m">'+v.items.map(function(it){return it.nombre+' x'+it.cant;}).join(', ')+'</div><div class="h" style="margin-top:6px"><span style="font-weight:800">'+Format.money(v.total)+'</span><span class="badge '+e[1]+'">'+(e[0]||v.pago||'')+'</span></div>'+devInfo+btns+'</div>';
+}).join('');
+}
+function ventaById(id){for(var i=0;i<ventas.length;i++)if(ventas[i].id===id)return ventas[i];return null;}
+function marcarEntregado(id){
+var v=ventaById(id);if(!v)return;
+v.estado='entregado';v.fechaEntrega=hoyISO();
+DB.set('ventasV',ventas);
+pintarPedidos();
+Notif.success('✅ Pedido de '+v.cliente+' marcado como entregado');
+}
+var devVentaId=null;
+function abrirDevolucion(id){
+var v=ventaById(id);if(!v)return;
+devVentaId=id;
+$('devInfoPedido').textContent=v.cliente+' · '+v.fecha+' · '+Format.money(v.total);
+if(v.devolucion){
+$('devTipo').value=v.devolucion.tipo||'total';
+$('devMonto').value=v.devolucion.monto||'';
+$('devMotivo2').value=v.devolucion.motivo||'Producto defectuoso';
+$('devObs2').value=v.devolucion.obs||'';
+}else{
+$('devTipo').value='total';$('devMonto').value='';$('devMotivo2').value='Producto defectuoso';$('devObs2').value='';
+}
+$('wrapDevMonto').style.display=($('devTipo').value==='parcial')?'block':'none';
+$('modalDevolucion').classList.add('on');
+}
+function guardarDevolucion(){
+if(!devVentaId)return;
+var v=ventaById(devVentaId);if(!v){$('modalDevolucion').classList.remove('on');return;}
+var tipo=$('devTipo').value;
+var monto=tipo==='total'?v.total:(parseFloat($('devMonto').value)||0);
+if(tipo==='parcial'&&monto<=0){Notif.error('Indica el valor devuelto');return;}
+v.devolucion={tipo:tipo,monto:monto,motivo:$('devMotivo2').value,obs:$('devObs2').value,fecha:hoyISO()};
+v.estado=(tipo==='total')?'devuelto_total':'devuelto_parcial';
+DB.set('ventasV',ventas);
+$('modalDevolucion').classList.remove('on');
+devVentaId=null;
+pintarPedidos();
+Notif.success('↩️ Devolución registrada');
+}
 
 function renderProductos(q){
 q=norm(q||'');var r=productos;
@@ -717,14 +878,35 @@ var h=hoyISO();var vh=visitas.filter(function(v){return v.fecha===h;});
 $('vHoy').textContent=vh.length;$('vOk').textContent=vh.filter(function(v){return v.res==='Exitosa';}).length;
 var c=$('listaVisitas');
 if(!vh.length){c.innerHTML='<div class="empty"><div class="e">📍</div><p>Sin visitas hoy</p></div>';return;}
-c.innerHTML=vh.slice().reverse().map(function(v){return '<div class="vitem '+(v.res==='Exitosa'?'done':'')+'"><div class="h"><b>'+v.cliente+'</b><span class="badge '+(v.res==='Exitosa'?'b-ok':v.res==='Pendiente'?'b-warn':'b-acc')+'">'+v.res+'</span></div><div class="m">'+v.hora+' · '+v.tipo+(v.obs?' · '+v.obs:'')+(v.gps?' · 📍':'')+'</div></div>';}).join('');
+c.innerHTML=vh.slice().reverse().map(function(v){return '<div class="vitem '+(v.res==='Exitosa'?'done':'')+'"><div class="h"><b>'+v.cliente+'</b><span class="badge '+(v.res==='Exitosa'?'b-ok':v.res==='Pendiente'?'b-warn':v.res==='No compró'?'b-acc':'b-acc')+'">'+v.res+'</span></div><div class="m">'+v.hora+' · '+v.tipo+(v.motivo?' · 🚫 '+v.motivo:'')+(v.obs?' · '+v.obs:'')+(v.gps?' · 📍':'')+(v.lejos?' · <span style="color:var(--acc)">⚠️ a '+v.distanciaM+'m del cliente</span>':'')+'</div></div>';}).join('');
+}
+function comoLlegar(id){
+var c=cliById(id);if(!c)return;
+var destino=(c.lat!=null&&c.lng!=null)?(c.lat+','+c.lng):encodeURIComponent(c.dir||c.nombre);
+window.open('https://www.google.com/maps/dir/?api=1&destination='+destino,'_blank');
+}
+function distanciaMetros(lat1,lng1,lat2,lng2){
+var R=6371000,toRad=function(d){return d*Math.PI/180;};
+var dLat=toRad(lat2-lat1),dLng=toRad(lng2-lng1);
+var a=Math.sin(dLat/2)*Math.sin(dLat/2)+Math.cos(toRad(lat1))*Math.cos(toRad(lat2))*Math.sin(dLng/2)*Math.sin(dLng/2);
+return R*2*Math.atan2(Math.sqrt(a),Math.sqrt(1-a));
 }
 function regVisita(){
 if(!visCliSel){Notif.error('Busca y elige un cliente');return;}
-visitas.push({id:'VI'+Date.now(),fecha:hoyISO(),hora:$('visHora').value||new Date().toLocaleTimeString('es-CO').slice(0,5),clienteId:visCliSel.id,cliente:visCliSel.nombre,tipo:$('visTipo').value,res:$('visRes').value,obs:$('visObs').value,gps:visCliSel._gps||''});
+var lejos=false,distM=null;
+if(visCliSel._gps&&visCliSel.lat!=null&&visCliSel.lng!=null){
+var p=visCliSel._gps.split(',');
+distM=Math.round(distanciaMetros(parseFloat(p[0]),parseFloat(p[1]),visCliSel.lat,visCliSel.lng));
+lejos=distM>300;
+}
+var resVis=$('visRes').value;
+visitas.push({id:'VI'+Date.now(),fecha:hoyISO(),hora:$('visHora').value||new Date().toLocaleTimeString('es-CO').slice(0,5),clienteId:visCliSel.id,cliente:visCliSel.nombre,tipo:$('visTipo').value,res:resVis,motivo:(resVis==='No compró'?$('visMotivo').value:''),obs:$('visObs').value,gps:visCliSel._gps||'',distanciaM:distM,lejos:lejos});
 DB.set('visitasV',visitas);
 $('visObs').value='';$('visCliSearch').value='';visCliSel=null;
-pintarVisitas();pintarMenu();Notif.success('Visita guardada');
+$('wrapVisMotivo').style.display='none';
+pintarVisitas();pintarMenu();
+if(lejos)Notif.warning('Visita guardada · ⚠️ estás a '+distM+'m de la dirección registrada del cliente');
+else Notif.success('Visita guardada');
 }
 function capturarGPS(){
 if(!navigator.geolocation){Notif.error('GPS no disponible');return;}
@@ -734,6 +916,51 @@ var g=p.coords.latitude.toFixed(5)+','+p.coords.longitude.toFixed(5);
 if(visCliSel)visCliSel._gps=g;
 $('gpsBtn').textContent='✅ '+g;Notif.success('Ubicación capturada');
 },function(){$('gpsBtn').textContent='Capturar';Notif.error('No se obtuvo ubicación');},{enableHighAccuracy:true});
+}
+
+/* ===== Nuevo cliente (registrado directamente desde la app del vendedor) ===== */
+var cliGeoCapturadaV=null;
+function toggleNuevoCli(){
+var f=$('formNuevoCliente');
+var abrir=f.style.display==='none';
+f.style.display=abrir?'block':'none';
+if(abrir)$('nvNombre').focus();
+}
+function cancelarNuevoCli(){
+$('nvNombre').value='';$('nvDoc').value='';$('nvTel').value='';$('nvDir').value='';$('nvZona').value='';
+cliGeoCapturadaV=null;
+$('geoNuevoCliEstado').textContent='Sin ubicación capturada';$('geoNuevoCliEstado').style.color='var(--ink2)';
+$('btnGeoNuevoCli').textContent='📍 Capturar ubicación';
+$('formNuevoCliente').style.display='none';
+}
+function geoNuevoCli(){
+if(!navigator.geolocation){Notif.error('❌ Este dispositivo no soporta GPS');return;}
+var btn=$('btnGeoNuevoCli'),est=$('geoNuevoCliEstado');
+btn.textContent='📍 Buscando...';
+navigator.geolocation.getCurrentPosition(function(p){
+cliGeoCapturadaV={lat:p.coords.latitude,lng:p.coords.longitude};
+est.textContent='✅ Ubicación capturada ('+p.coords.latitude.toFixed(5)+', '+p.coords.longitude.toFixed(5)+')';
+est.style.color='var(--ok)';
+btn.textContent='📍 Actualizar ubicación';
+Notif.success('✅ Ubicación GPS capturada');
+},function(){btn.textContent='📍 Capturar ubicación';Notif.error('❌ No se pudo obtener la ubicación. Revisa el permiso de ubicación.');},{enableHighAccuracy:true,timeout:10000});
+}
+function guardarNuevoCli(){
+var nom=$('nvNombre').value.trim(),doc=$('nvDoc').value.trim(),tel=$('nvTel').value.trim(),dir=$('nvDir').value.trim(),zona=$('nvZona').value.trim();
+if(!nom||!tel){Notif.error('❌ Completa al menos el nombre y el teléfono');return;}
+var nc={id:'CLI'+Date.now(),
+doc:doc,documento:doc,nombre:nom,
+tel:tel,telefono:tel,
+dir:dir,direccion:dir,
+zona:zona,ciudad:'',
+fav:false,compras:0,cantidadCompras:0,total:0,totalCompras:0,ultima:'',ultimaCompra:null,saldo:0,
+estado:'activo',segmento:'nuevo',fuente:'vendedor',fechaRegistro:new Date().toISOString(),
+lat:cliGeoCapturadaV?cliGeoCapturadaV.lat:null,lng:cliGeoCapturadaV?cliGeoCapturadaV.lng:null};
+clientes.push(nc);
+DB.set('clientes',clientes);
+cancelarNuevoCli();
+Notif.success('✅ Cliente '+nom+' registrado');
+pintarClientes();
 }
 
 function pintarMetas(){
@@ -766,7 +993,7 @@ if(typeof XLSX==='undefined'){Notif.error('Librería Excel no cargó');return;}
 var wb=XLSX.utils.book_new();
 XLSX.utils.book_append_sheet(wb,XLSX.utils.json_to_sheet(ventas.map(function(v){return {Fecha:v.fecha,Hora:v.hora,Cliente:v.cliente,Total:v.total,Pago:v.pago,Estado:v.estado};})),'Ventas');
 XLSX.utils.book_append_sheet(wb,XLSX.utils.json_to_sheet(clientes.map(function(c){return {Nombre:c.nombre,Doc:c.doc,Telefono:c.tel,Zona:c.zona,Compras:c.compras,Total:c.total,Saldo:c.saldo};})),'Clientes');
-XLSX.utils.book_append_sheet(wb,XLSX.utils.json_to_sheet(visitas.map(function(v){return {Fecha:v.fecha,Cliente:v.cliente,Tipo:v.tipo,Resultado:v.res,Obs:v.obs};})),'Visitas');
+XLSX.utils.book_append_sheet(wb,XLSX.utils.json_to_sheet(visitas.map(function(v){return {Fecha:v.fecha,Cliente:v.cliente,Tipo:v.tipo,Resultado:v.res,Motivo:v.motivo||'',Obs:v.obs};})),'Visitas');
 XLSX.writeFile(wb,'Vendedor_'+hoyISO()+'.xlsx');Notif.success('Exportado a Excel');
 }
 function compartir(){
@@ -805,6 +1032,7 @@ function sync(){
 function recargarDatosLocales(){
     productos=DB.get('productos',[]);
     clientes=DB.get('clientes',[]);
+    normalizarClientes();
     ventas=DB.get('ventasV',[]);
     visitas=DB.get('visitasV',[]);
     meta=DB.get('metaV',5000000);
@@ -820,7 +1048,7 @@ if(navigator.share){navigator.share({title:'Resumen del día - DISTRIMARKET',tex
 else{window.open('https://wa.me/?text='+encodeURIComponent(txt),'_blank');}
 }
 
-function pintarTodo(){pintarDashboard();pintarClientes();pintarVisitas();pintarMetas();pintarPerfil();pintarMenu();}
+function pintarTodo(){pintarDashboard();pintarClientes();pintarVisitas();pintarMetas();pintarPerfil();pintarMenu();if($('m-pedidos'))$('m-pedidos').textContent=ventas.length;}
 
 /* ===== scroll reveal ===== */
 function revealAll(){var els=document.querySelectorAll('.tab.on .reveal');for(var i=0;i<els.length;i++)els[i].classList.add('in');}
@@ -852,7 +1080,12 @@ case 'histCli': if(cliSel)histCliente(cliSel.id); break;
 case 'histCliId': histCliente(id); break;
 case 'waCliId': var cc=cliById(id);if(cc)window.open('https://wa.me/57'+cc.tel.replace(/\D/g,''),'_blank'); break;
 case 'pedidoCli': var pc=cliById(id);if(pc){go('pedido');setTimeout(function(){elegirCliente(id,'pedido');},120);} break;
+case 'comoLlegar': comoLlegar(id); break;
 case 'fav': var fc=cliById(id);if(fc){fc.fav=!fc.fav;DB.set('clientes',clientes);pintarClientes();} break;
+case 'toggleNuevoCli': toggleNuevoCli(); break;
+case 'cancelarNuevoCli': cancelarNuevoCli(); break;
+case 'geoNuevoCli': geoNuevoCli(); break;
+case 'guardarNuevoCli': guardarNuevoCli(); break;
 case 'regVisita': regVisita(); break;
 case 'gps': capturarGPS(); break;
 case 'exportTodo': exportTodo(); break;
@@ -864,6 +1097,10 @@ case 'guardarMeta': meta=parseInt($('metaInput').value)||5000000;DB.set('metaV',
 case 'reset': if(confirm('¿Borrar TODOS los datos?')){localStorage.clear();location.reload();} break;
 case 'logout': if(confirm('¿Cerrar sesión?'))location.href='login.html'; break;
 case 'closeModal': $('modalHist').classList.remove('on'); break;
+case 'marcarEntregado': marcarEntregado(id); break;
+case 'abrirDevolucion': abrirDevolucion(id); break;
+case 'guardarDevolucion': guardarDevolucion(); break;
+case 'closeModalDev': $('modalDevolucion').classList.remove('on'); break;
 }
 });
 
@@ -895,6 +1132,9 @@ bindAC('cliSearch2','cliResults2','cliente2');
 bindAC('prodSearch','prodResults','prod');
 bindAC('visCliSearch','visCliResults','visita');
 $('cliSearch2').addEventListener('input',function(){pintarClientes();});
+if($('pedBuscar'))$('pedBuscar').addEventListener('input',function(){pintarPedidos();});
+if($('visRes'))$('visRes').addEventListener('change',function(){$('wrapVisMotivo').style.display=(this.value==='No compró')?'block':'none';});
+if($('devTipo'))$('devTipo').addEventListener('change',function(){$('wrapDevMonto').style.display=(this.value==='parcial')?'block':'none';});
 $('fechaEnt').value=hoyISO();
 pintarTodo();
 setupReveal();
