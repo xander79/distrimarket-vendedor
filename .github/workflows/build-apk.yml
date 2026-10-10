@@ -1,4 +1,4 @@
-ame: Compilar APK Android
+name: Compilar APK Android
 
 on:
   push:
