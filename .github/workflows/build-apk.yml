@@ -15,6 +15,12 @@ jobs:
       - name: Descargar el codigo
         uses: actions/checkout@v4
 
+      - name: Configurar Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
       - name: Configurar Node.js
         uses: actions/setup-node@v4
         with:
@@ -37,12 +43,6 @@ jobs:
             echo "No se encontro debug.keystore (se busco en /android y en la raiz)"
             exit 1
           fi
-
-      - name: Configurar Java
-        uses: actions/setup-java@v4
-        with:
-          distribution: 'temurin'
-          java-version: '17'
 
       - name: Dar permiso de ejecucion a gradlew
         run: chmod +x android/gradlew
