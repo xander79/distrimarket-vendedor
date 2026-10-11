@@ -29,15 +29,14 @@ jobs:
       - name: Instalar dependencias
         run: npm ci
 
+      - name: Instalar TypeScript (necesario para leer capacitor.config.ts)
+        run: npm install -D typescript
+
       - name: Dar permiso de ejecucion a gradlew
         run: chmod +x android/gradlew
 
       - name: Sincronizar Capacitor (copiar www/ al proyecto Android)
-        run: |
-          set +e
-          npx cap sync android > cap_sync_log.txt 2>&1
-          echo "CAP_SYNC_EXIT_CODE=$?" >> cap_sync_log.txt
-          cat cap_sync_log.txt
+        run: npx cap sync android
 
       - name: Restaurar keystore de debug fijo (para firmar siempre igual)
         run: |
@@ -48,41 +47,18 @@ jobs:
             cp "debug.keystore" "$HOME/.android/debug.keystore"
           else
             echo "No se encontro debug.keystore (se busco en /android y en la raiz)"
+            exit 1
           fi
 
       - name: Compilar APK de debug
-        run: |
-          set +e
-          cd android
-          ./gradlew assembleDebug > ../gradle_log.txt 2>&1
-          echo "GRADLE_EXIT_CODE=$?" >> ../gradle_log.txt
+        working-directory: android
+        run: ./gradlew assembleDebug
 
-      - name: Guardar informacion de diagnostico
-        if: always()
-        run: |
-          {
-            echo "== node -v =="
-            node -v
-            echo "== npm -v =="
-            npm -v
-            echo "== java -version =="
-            java -version 2>&1
-            echo "== cap_sync_log.txt =="
-            cat cap_sync_log.txt 2>/dev/null || echo "(no se genero este archivo)"
-            echo "== gradle_log.txt (ultimas 300 lineas) =="
-            tail -300 gradle_log.txt 2>/dev/null || echo "(no se genero este archivo)"
-            echo "== contenido de android/app/build/outputs/apk/debug =="
-            ls -la android/app/build/outputs/apk/debug 2>/dev/null || echo "(no existe esa carpeta)"
-          } > debug_info.txt
-
-      - name: Publicar resultado (APK y/o diagnostico)
-        if: always()
+      - name: Publicar APK como "Release" descargable
         uses: softprops/action-gh-release@v2
         with:
           tag_name: build-${{ github.run_number }}
           name: Build ${{ github.run_number }}
-          files: |
-            android/app/build/outputs/apk/debug/app-debug.apk
-            debug_info.txt
+          files: android/app/build/outputs/apk/debug/app-debug.apk
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
