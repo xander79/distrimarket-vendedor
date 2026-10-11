@@ -29,8 +29,8 @@ jobs:
       - name: Instalar dependencias
         run: npm ci
 
-      - name: Instalar TypeScript (necesario para leer capacitor.config.ts)
-        run: npm install -D typescript
+      - name: Instalar TypeScript (version compatible, necesaria para leer capacitor.config.ts)
+        run: npm install -D typescript@5.4.5
 
       - name: Dar permiso de ejecucion a gradlew
         run: chmod +x android/gradlew
