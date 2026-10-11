@@ -320,6 +320,7 @@ body.dark .toast-demo{color:#fbbf24}
 </div>
 <div class="field"><label>Dirección</label><input type="text" id="nvDir" placeholder="Dirección del negocio"></div>
 <div class="field"><label>Zona</label><input type="text" id="nvZona" placeholder="Norte, Sur, Centro..."></div>
+<div class="field"><label>Día de visita</label><select id="nvDia"><option value="">Sin asignar</option><option value="lunes">📅 Lunes</option><option value="martes">📅 Martes</option><option value="miercoles">📅 Miércoles</option><option value="jueves">📅 Jueves</option><option value="viernes">📅 Viernes</option><option value="sabado">📅 Sábado</option></select></div>
 <div class="field"><label><span class="e">📍</span> Ubicación GPS</label><div style="display:flex;align-items:center;gap:10px"><button class="btn sm info" type="button" data-act="geoNuevoCli" id="btnGeoNuevoCli">📍 Capturar ubicación</button><span id="geoNuevoCliEstado" style="font-size:13px;color:var(--ink2)">Sin ubicación capturada</span></div></div>
 <div class="row2">
 <button class="btn ghost block" data-act="cancelarNuevoCli">Cancelar</button>
@@ -331,6 +332,7 @@ body.dark .toast-demo{color:#fbbf24}
 <input type="text" id="cliSearch2" placeholder="Nombre, cédula o teléfono..." autocomplete="off">
 <div class="ac-list" id="cliResults2"></div>
 </div>
+<button class="btn ghost block" id="btnSoloHoy" data-act="toggleSoloHoy" style="margin-bottom:10px">📅 Ver solo los de hoy</button>
 <div id="listaClientes"></div>
 </section>
 
@@ -515,6 +517,9 @@ var carrito = [];
 var cliSel = null;
 var visCliSel = null;
 var charts = {};
+var filtroSoloHoy = false;
+function diaSemanaHoy(){var map=['domingo','lunes','martes','miercoles','jueves','viernes','sabado'];return map[new Date().getDay()];}
+function diaLabel(d){var m={lunes:'Lunes',martes:'Martes',miercoles:'Miércoles',jueves:'Jueves',viernes:'Viernes',sabado:'Sábado'};return m[d]||'Sin día';}
 
 function seed(){
 if(productos.length===0){
@@ -532,11 +537,11 @@ DB.set('productos',productos);
 }
 if(clientes.length===0){
 clientes=[
-{id:'C1',nombre:'Tienda La Esquina',doc:'900111111',tel:'3001111111',dir:'Calle 100 #20-30',zona:'Norte',fav:true,compras:15,total:1500000,ultima:'2026-07-25',saldo:150000,lat:4.7110,lng:-74.0387},
-{id:'C2',nombre:'Minimarket El Parque',doc:'900222222',tel:'3002222222',dir:'Cra 15 #40-50',zona:'Norte',fav:false,compras:8,total:800000,ultima:'2026-07-20',saldo:0,lat:4.6280,lng:-74.0631},
-{id:'C3',nombre:'Supermercado Central',doc:'900333333',tel:'3003333333',dir:'Av 30 #60-70',zona:'Centro',fav:true,compras:25,total:2500000,ultima:'2026-07-27',saldo:320000,lat:4.6097,lng:-74.0817},
-{id:'C4',nombre:'Droguería San José',doc:'900444444',tel:'3004444444',dir:'Calle 72 #11-22',zona:'Centro',fav:false,compras:6,total:420000,ultima:'2026-07-18',saldo:0,lat:4.6533,lng:-74.0586},
-{id:'C5',nombre:'Panadería El Trigal',doc:'900555555',tel:'3005555555',dir:'Cra 7 #85-10',zona:'Norte',fav:true,compras:12,total:980000,ultima:'2026-07-26',saldo:85000,lat:4.6751,lng:-74.0477}
+{id:'C1',nombre:'Tienda La Esquina',doc:'900111111',tel:'3001111111',dir:'Calle 100 #20-30',zona:'Norte',diaVisita:'lunes',fav:true,compras:15,total:1500000,ultima:'2026-07-25',saldo:150000,lat:4.7110,lng:-74.0387},
+{id:'C2',nombre:'Minimarket El Parque',doc:'900222222',tel:'3002222222',dir:'Cra 15 #40-50',zona:'Norte',diaVisita:'lunes',fav:false,compras:8,total:800000,ultima:'2026-07-20',saldo:0,lat:4.6280,lng:-74.0631},
+{id:'C3',nombre:'Supermercado Central',doc:'900333333',tel:'3003333333',dir:'Av 30 #60-70',zona:'Centro',diaVisita:'miercoles',fav:true,compras:25,total:2500000,ultima:'2026-07-27',saldo:320000,lat:4.6097,lng:-74.0817},
+{id:'C4',nombre:'Droguería San José',doc:'900444444',tel:'3004444444',dir:'Calle 72 #11-22',zona:'Centro',diaVisita:'viernes',fav:false,compras:6,total:420000,ultima:'2026-07-18',saldo:0,lat:4.6533,lng:-74.0586},
+{id:'C5',nombre:'Panadería El Trigal',doc:'900555555',tel:'3005555555',dir:'Cra 7 #85-10',zona:'Norte',diaVisita:'',fav:true,compras:12,total:980000,ultima:'2026-07-26',saldo:85000,lat:4.6751,lng:-74.0477}
 ];
 DB.set('clientes',clientes);
 }
@@ -724,11 +729,17 @@ $('cTotal').textContent=clientes.length;
 $('cFav').textContent=clientes.filter(function(c){return c.fav;}).length;
 $('cSaldo').textContent=clientes.filter(function(c){return (c.saldo||0)>0;}).length;
 $('cDeuda').textContent=Format.money(clientes.reduce(function(s,c){return s+(c.saldo||0);},0));
+var btnHoy=$('btnSoloHoy');
+if(btnHoy){btnHoy.textContent=filtroSoloHoy?('📅 Viendo: hoy ('+diaLabel(diaSemanaHoy())+')'):'📅 Ver solo los de hoy';btnHoy.classList.toggle('brand',filtroSoloHoy);btnHoy.classList.toggle('ghost',!filtroSoloHoy);}
+if(filtroSoloHoy){var hoy=diaSemanaHoy();lista=lista.filter(function(c){return c.diaVisita===hoy;});}
 var c=$('listaClientes');
-if(!lista.length){c.innerHTML='<div class="empty"><div class="e">👥</div><p>Sin clientes</p></div>';return;}
-c.innerHTML=lista.map(function(c){return '<div class="cli-card '+(c.fav?'fav':'')+'"><div class="h"><div><div class="nm">'+c.nombre+'</div><div class="mt">📱 '+c.tel+' · 📍 '+c.dir+'</div></div><button class="star" data-act="fav" data-id="'+c.id+'">'+(c.fav?'⭐':'☆')+'</button></div><div class="st"><div><div class="l">Compras</div><div class="v">'+c.compras+'</div></div><div><div class="l">Total</div><div class="v">'+Format.money(c.total)+'</div></div><div><div class="l">Saldo</div><div class="v" style="color:'+(c.saldo>0?'var(--accent)':'var(--ok)')+'">'+Format.money(c.saldo||0)+'</div></div></div><div style="display:flex;gap:7px;margin-top:10px;flex-wrap:wrap"><button class="btn sm ok" data-act="waCliId" data-id="'+c.id+'">💬 WhatsApp</button><button class="btn sm ghost" data-act="histCliId" data-id="'+c.id+'">📊 Historial</button><button class="btn sm brand" data-act="pedidoCli" data-id="'+c.id+'">🛒 Pedido</button><button class="btn sm info" data-act="comoLlegar" data-id="'+c.id+'">🗺️ Cómo llegar</button></div></div>';}).join('');
+if(!lista.length){c.innerHTML='<div class="empty"><div class="e">👥</div><p>'+(filtroSoloHoy?'Ningún cliente tiene visita programada para hoy':'Sin clientes')+'</p></div>';return;}
+c.innerHTML=lista.map(function(c){
+var sel=['',  'lunes','martes','miercoles','jueves','viernes','sabado'].map(function(d){return '<option value="'+d+'" '+((c.diaVisita||'')===d?'selected':'')+'>'+(d===''?'Sin día':diaLabel(d))+'</option>';}).join('');
+return '<div class="cli-card '+(c.fav?'fav':'')+'"><div class="h"><div><div class="nm">'+c.nombre+'</div><div class="mt">📱 '+c.tel+' · 📍 '+c.dir+'</div></div><button class="star" data-act="fav" data-id="'+c.id+'">'+(c.fav?'⭐':'☆')+'</button></div><div class="st"><div><div class="l">Compras</div><div class="v">'+c.compras+'</div></div><div><div class="l">Total</div><div class="v">'+Format.money(c.total)+'</div></div><div><div class="l">Saldo</div><div class="v" style="color:'+(c.saldo>0?'var(--accent)':'var(--ok)')+'">'+Format.money(c.saldo||0)+'</div></div></div><div style="margin-top:8px;font-size:12px;color:var(--ink2);display:flex;align-items:center;gap:6px;">🗓️ Visita: <select onchange="cambiarDiaCliV(\''+c.id+'\',this.value)" style="padding:2px 6px;border-radius:6px;border:1px solid #ccc;font-size:12px;">'+sel+'</select></div><div style="display:flex;gap:7px;margin-top:10px;flex-wrap:wrap"><button class="btn sm ok" data-act="waCliId" data-id="'+c.id+'">💬 WhatsApp</button><button class="btn sm ghost" data-act="histCliId" data-id="'+c.id+'">📊 Historial</button><button class="btn sm brand" data-act="pedidoCli" data-id="'+c.id+'">🛒 Pedido</button><button class="btn sm info" data-act="comoLlegar" data-id="'+c.id+'">🗺️ Cómo llegar</button></div></div>';}).join('');
 }
 function pintarClientes(){pintarListaClientes();}
+function cambiarDiaCliV(id,valor){var c=cliById(id);if(!c)return;c.diaVisita=valor;DB.set('clientes',clientes);Notif.success('✅ Día de visita actualizado');if(filtroSoloHoy)pintarClientes();}
 
 var mapaInst=null,mapaMarcadores=[];
 function pintarMapa(){
@@ -927,7 +938,7 @@ f.style.display=abrir?'block':'none';
 if(abrir)$('nvNombre').focus();
 }
 function cancelarNuevoCli(){
-$('nvNombre').value='';$('nvDoc').value='';$('nvTel').value='';$('nvDir').value='';$('nvZona').value='';
+$('nvNombre').value='';$('nvDoc').value='';$('nvTel').value='';$('nvDir').value='';$('nvZona').value='';$('nvDia').value='';
 cliGeoCapturadaV=null;
 $('geoNuevoCliEstado').textContent='Sin ubicación capturada';$('geoNuevoCliEstado').style.color='var(--ink2)';
 $('btnGeoNuevoCli').textContent='📍 Capturar ubicación';
@@ -952,7 +963,7 @@ var nc={id:'CLI'+Date.now(),
 doc:doc,documento:doc,nombre:nom,
 tel:tel,telefono:tel,
 dir:dir,direccion:dir,
-zona:zona,ciudad:'',
+zona:zona,ciudad:'',diaVisita:$('nvDia').value,
 fav:false,compras:0,cantidadCompras:0,total:0,totalCompras:0,ultima:'',ultimaCompra:null,saldo:0,
 estado:'activo',segmento:'nuevo',fuente:'vendedor',fechaRegistro:new Date().toISOString(),
 lat:cliGeoCapturadaV?cliGeoCapturadaV.lat:null,lng:cliGeoCapturadaV?cliGeoCapturadaV.lng:null};
@@ -992,7 +1003,7 @@ function exportTodo(){
 if(typeof XLSX==='undefined'){Notif.error('Librería Excel no cargó');return;}
 var wb=XLSX.utils.book_new();
 XLSX.utils.book_append_sheet(wb,XLSX.utils.json_to_sheet(ventas.map(function(v){return {Fecha:v.fecha,Hora:v.hora,Cliente:v.cliente,Total:v.total,Pago:v.pago,Estado:v.estado};})),'Ventas');
-XLSX.utils.book_append_sheet(wb,XLSX.utils.json_to_sheet(clientes.map(function(c){return {Nombre:c.nombre,Doc:c.doc,Telefono:c.tel,Zona:c.zona,Compras:c.compras,Total:c.total,Saldo:c.saldo};})),'Clientes');
+XLSX.utils.book_append_sheet(wb,XLSX.utils.json_to_sheet(clientes.map(function(c){return {Nombre:c.nombre,Doc:c.doc,Telefono:c.tel,Zona:c.zona,DiaVisita:c.diaVisita?diaLabel(c.diaVisita):'',Compras:c.compras,Total:c.total,Saldo:c.saldo};})),'Clientes');
 XLSX.utils.book_append_sheet(wb,XLSX.utils.json_to_sheet(visitas.map(function(v){return {Fecha:v.fecha,Cliente:v.cliente,Tipo:v.tipo,Resultado:v.res,Motivo:v.motivo||'',Obs:v.obs};})),'Visitas');
 XLSX.writeFile(wb,'Vendedor_'+hoyISO()+'.xlsx');Notif.success('Exportado a Excel');
 }
@@ -1101,6 +1112,7 @@ case 'marcarEntregado': marcarEntregado(id); break;
 case 'abrirDevolucion': abrirDevolucion(id); break;
 case 'guardarDevolucion': guardarDevolucion(); break;
 case 'closeModalDev': $('modalDevolucion').classList.remove('on'); break;
+case 'toggleSoloHoy': filtroSoloHoy=!filtroSoloHoy; pintarClientes(); break;
 }
 });
 
