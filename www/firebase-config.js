@@ -26,12 +26,12 @@ USO: cargar despues de compat.js (o de la capa embebida), al final del <body>:
         (se guardan en localStorage y se usan al recargar).
    ============================================================ */
 var DEFAULT_CFG = {
-    apiKey: '',
-    authDomain: '',
-    projectId: '',
-    storageBucket: '',
-    messagingSenderId: '',
-    appId: ''
+    apiKey: 'AIzaSyBi2azVYJyeEGCxuNRpM0IB5eenDLktn74',
+    authDomain: 'distrimarketat.firebaseapp.com',
+    projectId: 'distrimarketat',
+    storageBucket: 'distrimarketat.firebasestorage.app',
+    messagingSenderId: '705572006338',
+    appId: '1:705572006338:web:f478997a11c8ef7c4e0e5b'
 };
 
 function readStoredCreds() {
@@ -152,6 +152,16 @@ function loadFirebaseSDK() {
         return loadScript(urls[i]).catch(function () { return tryOne(i + 1); });
     }
     return tryOne(0).then(function () {
+        var authUrls = [
+            'https://www.gstatic.com/firebasejs/9.23.0/firebase-auth-compat.js',
+            'https://cdn.jsdelivr.net/npm/firebase@9.23.0/dist/compat/firebase-auth.js'
+        ];
+        function tryAuth(k) {
+            if (k >= authUrls.length) return Promise.reject(new Error('auth CDN fallo'));
+            return loadScript(authUrls[k]).catch(function () { return tryAuth(k + 1); });
+        }
+        return tryAuth(0);
+    }).then(function () {
         var fsUrls = [
             'https://www.gstatic.com/firebasejs/9.23.0/firebase-firestore-compat.js',
             'https://cdn.jsdelivr.net/npm/firebase@9.23.0/dist/compat/firebase-firestore.js'
@@ -193,15 +203,19 @@ function initFirebase(cb) {
                 fbApp = window.firebase.app();
             }
             fbDb = window.firebase.firestore();
-            // ping de conexion
-            fbDb.enableNetwork().then(function () {
+            // autenticacion anonima: las reglas de Firestore exigen "request.auth != null",
+            // asi que sin esto NINGUNA lectura/escritura a la nube funcionaria (quedaria en localStorage).
+            // Si ya hay una sesion anonima guardada en este dispositivo, Firebase la reutiliza (no crea otra).
+            window.firebase.auth().signInAnonymously().then(function () {
+                return fbDb.enableNetwork();
+            }).then(function () {
                 fbOnline = true;
                 fbSync = (window.FB_SYNC === true) || (readStoredSync() === true);
-                logOk('conectado a Firestore (proyecto: ' + cfg.projectId + '). Sincronizacion en nube: ' + (fbSync ? 'ACTIVA' : 'inactiva (solo lectura local)') + '.');
+                logOk('conectado a Firestore (proyecto: ' + cfg.projectId + ', sesion anonima activa). Sincronizacion en nube: ' + (fbSync ? 'ACTIVA' : 'inactiva (solo lectura local)') + '.');
                 if (fbSync) startMirror();
                 if (cb) cb(true, 'Conectado a Firestore (proyecto: ' + cfg.projectId + ').');
             }).catch(function (e) {
-                fbOnline = false; var msg = 'No se pudo habilitar la red de Firestore: ' + (e && e.message ? e.message : e) + '.';
+                fbOnline = false; var msg = 'No se pudo autenticar/habilitar la red de Firestore: ' + (e && e.message ? e.message : e) + '.';
                 logWarn(msg + ' Queda en modo localStorage.');
                 if (cb) cb(false, msg);
             });
