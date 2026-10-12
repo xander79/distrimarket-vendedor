@@ -45,4 +45,9 @@
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
     <!-- Para "🎤 Por voz" al tomar un pedido (reconocimiento de voz del celular). -->
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <!-- Para que lleguen notificaciones push reales (productos nuevos, cambios de
+         precio, ofertas) incluso con la app cerrada. En Android 13 o mas nuevo,
+         sin este permiso el sistema bloquea las notificaciones aunque el usuario
+         las acepte dentro de la app. -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 </manifest>
