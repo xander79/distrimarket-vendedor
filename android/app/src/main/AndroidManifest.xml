@@ -38,4 +38,9 @@
     <!-- Permissions -->
 
     <uses-permission android:name="android.permission.INTERNET" />
+    <!-- Sin estos dos, "Capturar ubicación" (GPS) de la app nunca podía funcionar: Android
+         bloquea navigator.geolocation por completo si el permiso no está declarado aquí,
+         aparte de que el vendedor también debe aceptarlo la primera vez que se lo pida. -->
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
 </manifest>
