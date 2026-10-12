@@ -210,8 +210,8 @@ function initFirebase(cb) {
                 return fbDb.enableNetwork();
             }).then(function () {
                 fbOnline = true;
-                fbSync = (window.FB_SYNC === true) || (readStoredSync() === true);
-                logOk('conectado a Firestore (proyecto: ' + cfg.projectId + ', sesion anonima activa). Sincronizacion en nube: ' + (fbSync ? 'ACTIVA' : 'inactiva (solo lectura local)') + '.');
+                fbSync = syncActivaPorDefecto();
+                logOk('conectado a Firestore (proyecto: ' + cfg.projectId + ', sesion anonima activa). Sincronizacion en nube: ' + (fbSync ? 'ACTIVA' : 'inactiva (desactivada manualmente en Configuración)') + '.');
                 if (fbSync) startMirror();
                 if (cb) cb(true, 'Conectado a Firestore (proyecto: ' + cfg.projectId + ').');
             }).catch(function (e) {
@@ -233,6 +233,18 @@ function initFirebase(cb) {
 
 function readStoredSync() {
     try { var v = localStorage.getItem('fbSync'); return v === null ? null : (v === 'true'); } catch (e) { return null; }
+}
+// La sincronizacion ahora queda ACTIVA por defecto en cuanto hay conexion real a Firebase.
+// Antes quedaba apagada mientras alguien no marcara la casilla "Activar sincronizacion en la
+// nube" en config.html -> eso funciona en la PC de oficina (su localStorage recuerda el check),
+// pero el celular del vendedor tiene su PROPIO localStorage, separado, y nunca pasa por esa
+// pantalla: para el, "fbSync" siempre estaba vacio y el boton "Sincronizar" se negaba a subir o
+// bajar nada ("La sincronizacion esta desactivada"). Con este cambio, cualquier equipo (PC o
+// celular) sincroniza apenas detecta credenciales reales; la unica forma de apagarla sigue
+// siendo explicita: destildar la casilla en config.html (guarda 'fbSync'='false') o usar
+// FBConfig.setSync(false).
+function syncActivaPorDefecto() {
+    return !(window.FB_SYNC === false || readStoredSync() === false);
 }
 
 /* ============================================================
@@ -263,7 +275,11 @@ function safeDocId(key) {
 function startMirror() {
     // opcional: al conectar, subir una copia de las claves clave del sistema
     // (se hace en background y sin bloquear). Solo algunas para no saturar.
-    var keys = ['user', 'clientes', 'productos', 'enviosLogistica', 'transportadorasLogistica', 'bodegasMulti', 'stockMulti'];
+    // 'empresaLogo'/'empresaNombre' se agregan aqui porque ya existian en el localStorage de la
+    // PC de oficina ANTES de que Firebase quedara conectado -nunca se habian subido a la nube-;
+    // asi, en cuanto la oficina conecta, empuja ese logo ya guardado para que el celular lo
+    // pueda bajar la proxima vez que sincronice (ver pull en vendedor.html).
+    var keys = ['user', 'clientes', 'productos', 'enviosLogistica', 'transportadorasLogistica', 'bodegasMulti', 'stockMulti', 'empresaLogo', 'empresaNombre'];
     keys.forEach(function (k) {
         try {
             var raw = localStorage.getItem(k);

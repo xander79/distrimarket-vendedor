@@ -11,6 +11,13 @@
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js" onerror="window.__noChart=true"></script>
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" onerror="window.__noLeafletCss=true">
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" onerror="window.__noLeaflet=true"></script>
+<!-- Antes "Exportar" a Excel nunca podía funcionar: el botón llamaba a una librería de Excel
+     que esta página nunca cargaba (sí se usa en otros módulos de oficina, pero no aquí). Se usa
+     ExcelJS (no la librería XLSX simple) porque además de las hojas de datos, ahora el Excel
+     exportado también lleva el logo de la empresa incrustado como imagen en una portada -algo
+     que la librería XLSX básica no permite hacer gratis-. Se carga igual que chart.js/leaflet
+     arriba, con su propio aviso si el celular no tiene internet en ese momento. -->
+<script src="https://cdn.jsdelivr.net/npm/exceljs@4.4.0/dist/exceljs.min.js" onerror="window.__noExcelJS=true"></script>
 <script>
 /* ===== Capa autónoma (DB / Notif / Format) ===== */
 (function(){'use strict';
@@ -48,6 +55,8 @@ h1,h2,h3,.kpi .v,.brand-font,.mitem .l,.mitem .d{font-family:'Poppins','Segoe UI
 .header .row{display:flex;align-items:center;justify-content:space-between;gap:10px}
 .header h1{font-size:21px;font-weight:800;letter-spacing:.3px;display:flex;align-items:center;gap:9px}
 .header h1 .pico{font-size:24px}
+.header h1 .pico img{height:26px;width:auto;max-width:120px;object-fit:contain;vertical-align:middle;border-radius:4px}
+#pickLogoPico img{height:52px;width:auto;max-width:220px;object-fit:contain;border-radius:8px}
 .header .sub{font-size:12px;opacity:.78;margin-top:3px;letter-spacing:.2px}
 .header .who{font-size:12px;opacity:.92;margin-top:7px;display:flex;align-items:center;gap:7px}
 .header .who .dot{width:8px;height:8px;border-radius:50%;background:var(--ok);box-shadow:0 0 0 4px rgba(16,185,129,.22);animation:pulseDot 2s infinite}
@@ -198,10 +207,20 @@ body.dark .toast-demo{color:#fbbf24}
 </head>
 <body>
 
+<!-- ✅ SELECCIÓN DE VENDEDOR (permisos individuales) -->
+<div id="pickVendedorOverlay" style="display:none;position:fixed;inset:0;background:var(--bg);z-index:99999;overflow:auto;padding:24px 16px">
+<div style="max-width:420px;margin:30px auto">
+<div style="text-align:center;font-size:40px" id="pickLogoPico">🚚</div>
+<h2 style="text-align:center;margin:6px 0 2px" id="pickNombreEmpresa">DISTRIMARKET</h2>
+<p style="text-align:center;color:var(--ink2);margin-bottom:18px">¿Quién eres?</p>
+<div id="listaPickVendedor"></div>
+</div>
+</div>
+
 <div class="header">
 <div class="row">
 <div>
-<h1><span class="pico">🚚</span> DISTRIMARKET</h1>
+<h1><span class="pico" id="headerLogoPico">🚚</span> <span id="headerNombreEmpresa">DISTRIMARKET</span></h1>
 <div class="sub">App Vendedor · toma pedidos en segundos</div>
 </div>
 <div class="hbtns">
@@ -280,6 +299,13 @@ body.dark .toast-demo{color:#fbbf24}
 <label><span class="e">🔍</span> Buscar producto</label>
 <input type="text" id="prodSearch" placeholder="Nombre o código..." autocomplete="off">
 <div class="ac-list" id="prodResults"></div>
+</div>
+<!-- Formas opcionales de agregar un producto, además de escribir: por voz ("agrega 3 Canamor")
+     o escaneando el código de barras del producto. Si el celular no las soporta, cada botón
+     avisa y el vendedor sigue usando la búsqueda de siempre, sin que nada se rompa. -->
+<div style="display:flex;gap:8px;margin:-4px 0 12px">
+<button type="button" class="btn sm info" style="flex:1" data-act="pedirPorVoz">🎤 Por voz</button>
+<button type="button" class="btn sm info" style="flex:1" data-act="pedirPorCamara">📷 Escanear</button>
 </div>
 <div class="pgrid" id="pgrid"></div>
 </div>
@@ -410,11 +436,11 @@ body.dark .toast-demo{color:#fbbf24}
 <div class="mitem c2" data-act="go" data-go="pedido"><div class="e">🛒</div><div class="tx"><div class="l">Pedido</div><div class="d">Toma uno rápido</div></div><span class="live" id="m-carrito">0</span></div>
 <div class="mitem c3" data-act="go" data-go="clientes"><div class="e">👥</div><div class="tx"><div class="l">Clientes</div><div class="d">Busca y gestiona</div></div><span class="live vio" id="m-clientes">0</span></div>
 <div class="mitem c6" data-act="go" data-go="pedidos"><div class="e">🧾</div><div class="tx"><div class="l">Pedidos</div><div class="d">Busca por cliente</div></div><span class="live" id="m-pedidos">0</span></div>
-<div class="mitem c4" data-act="go" data-go="mapa"><div class="e">🗺️</div><div class="tx"><div class="l">Mapa</div><div class="d">Ubicación de clientes</div></div></div>
+<div class="mitem c4" id="mitemMapa" data-act="go" data-go="mapa"><div class="e">🗺️</div><div class="tx"><div class="l">Mapa</div><div class="d">Ubicación de clientes</div></div></div>
 <div class="mitem c4" data-act="go" data-go="visitas"><div class="e">📍</div><div class="tx"><div class="l">Visitas</div><div class="d">Registra tu ruta</div></div><span class="live warn" id="m-visitas">0</span></div>
 <div class="mitem c5" data-act="go" data-go="metas"><div class="e">🎯</div><div class="tx"><div class="l">Metas</div><div class="d">Comisiones y ranking</div></div><span class="live vio" id="m-cump">0%</span></div>
 <div class="mitem c6" data-act="go" data-go="perfil"><div class="e">👤</div><div class="tx"><div class="l">Perfil</div><div class="d">Tu información</div></div></div>
-<div class="mitem c1" data-act="exportTodo"><div class="e">📤</div><div class="tx"><div class="l">Exportar</div><div class="d">Baja todo a Excel</div></div></div>
+<div class="mitem c1" id="mitemExportar" data-act="exportTodo"><div class="e">📤</div><div class="tx"><div class="l">Exportar</div><div class="d">Baja todo a Excel</div></div></div>
 <div class="mitem c3" data-act="compartir"><div class="e">📲</div><div class="tx"><div class="l">Compartir</div><div class="d">Pasa la app</div></div></div>
 <div class="mitem c2" data-act="sync"><div class="e">🔄</div><div class="tx"><div class="l">Sincronizar</div><div class="d">Sube a la nube</div></div><span class="live warn" id="m-sync">0</span></div>
 </div>
@@ -435,6 +461,7 @@ body.dark .toast-demo{color:#fbbf24}
 <div style="width:78px;height:78px;border-radius:50%;background:linear-gradient(135deg,var(--brand),var(--accent));margin:0 auto 10px;display:flex;align-items:center;justify-content:center;font-size:34px;color:#fff"><span class="e">👤</span></div>
 <div style="font-size:19px;font-weight:800" id="pNombre">Carlos Pérez</div>
 <div style="color:var(--ink2);font-size:13px" id="pZona">Vendedor · Zona Norte</div>
+<button class="btn ghost" style="margin-top:12px;padding:8px 14px;font-size:13px" data-act="cambiarVendedor">🔄 Cambiar vendedor</button>
 </div>
 <div class="kpi-grid">
 <div class="kpi acc reveal"><div class="l">Ventas hoy</div><div class="v" id="pVHoy">$0</div></div>
@@ -520,6 +547,77 @@ var charts = {};
 var filtroSoloHoy = false;
 function diaSemanaHoy(){var map=['domingo','lunes','martes','miercoles','jueves','viernes','sabado'];return map[new Date().getDay()];}
 function diaLabel(d){var m={lunes:'Lunes',martes:'Martes',miercoles:'Miércoles',jueves:'Jueves',viernes:'Viernes',sabado:'Sábado'};return m[d]||'Sin día';}
+
+/* ===== Permisos individuales por vendedor =====
+   El administrador configura, por vendedor, qué puede hacer cada uno desde
+   adminvendedores.html (campo v.permisos). Esta app identifica "quién soy"
+   (vendedorActualId, guardado localmente en este celular) y aplica esos
+   permisos. Si todavía no hay vendedores configurados, o el vendedor no se
+   ha identificado, la app funciona igual que siempre (acceso completo). */
+var vendedores = DB.get('vendedores', []);
+function vendedorActualObj(){
+var id=DB.get('vendedorActualId',null);
+if(!id||id==='__none__')return null;
+return vendedores.find(function(v){return v.id===id;})||null;
+}
+function tienePermiso(key){
+var va=vendedorActualObj();
+if(!va||!va.permisos)return true;
+return va.permisos[key]!==false;
+}
+function mostrarPickVendedorSiHaceFalta(){
+var vs=DB.get('vendedores',[]);
+var actual=DB.get('vendedorActualId',null);
+var ov=$('pickVendedorOverlay');
+if(!ov)return false;
+if(!vs.length||actual){ov.style.display='none';return false;}
+var c=$('listaPickVendedor');
+c.innerHTML=vs.map(function(v){return '<button class="btn brand block" style="margin-bottom:8px;text-align:left" data-pick-vendedor="'+v.id+'">👤 '+v.nombre+'</button>';}).join('')+'<button class="btn ghost block" data-pick-vendedor="__skip" style="margin-top:4px">➡️ Omitir (acceso sin restricciones)</button>';
+ov.style.display='block';
+return true;
+}
+function elegirVendedor(id){
+DB.set('vendedorActualId',id);
+vendedores=DB.get('vendedores',[]);
+$('pickVendedorOverlay').style.display='none';
+aplicarPermisosUI();
+pintarTodo();
+}
+function cambiarVendedor(){
+DB.set('vendedorActualId',null);
+mostrarPickVendedorSiHaceFalta();
+}
+function aplicarPermisosUI(){
+var mi=$('mitemMapa');if(mi)mi.style.display=tienePermiso('mapa')?'':'none';
+var me=$('mitemExportar');if(me)me.style.display=tienePermiso('exportar')?'':'none';
+var bn=$('btnToggleNuevoCli');if(bn)bn.style.display=tienePermiso('nuevoCliente')?'':'none';
+var optCredito=document.querySelector('#formaPago option[value="Crédito"]');
+if(optCredito)optCredito.disabled=!tienePermiso('credito');
+var va=vendedorActualObj();
+if(va){
+if($('pNombre'))$('pNombre').textContent=va.nombre;
+if($('pZona'))$('pZona').textContent='Vendedor · Zona '+(va.zona?(va.zona.charAt(0).toUpperCase()+va.zona.slice(1)):'-');
+if($('hWho'))$('hWho').textContent=va.nombre+(va.zona?(' · Zona '+va.zona.charAt(0).toUpperCase()+va.zona.slice(1)):'');
+}
+}
+
+/* Pinta el logo de la empresa (si el administrador ya lo subió desde cualquier pantalla de
+   oficina) en el encabezado y en la pantalla de "¿Quién eres?". Lee de DB.get('empresaLogo')/
+   ('empresaNombre') -las mismas claves que usa logo-empresa.js en todos los módulos de
+   oficina- y esas dos claves ahora también se traen por Firebase (ver sync()/intentarSyncSilenciosa()),
+   así que el logo que se sube en la PC llega solo al celular la próxima vez que sincronice.
+   Si todavía no hay logo guardado, se queda con el camioncito 🚚 de siempre. */
+function aplicarLogoEmpresa(){
+    try{
+        var logo=(window.LogoEmpresa?LogoEmpresa.get().logo:null)||DB.get('empresaLogo',null);
+        var nombre=(window.LogoEmpresa?LogoEmpresa.get().nombre:null)||DB.get('empresaNombre',null)||'DISTRIMARKET';
+        var imgHtml=logo?('<img src="'+logo+'" alt="'+String(nombre).replace(/"/g,'&quot;')+'">'):'🚚';
+        var hp=$('headerLogoPico');if(hp)hp.innerHTML=imgHtml;
+        var hn=$('headerNombreEmpresa');if(hn)hn.textContent=nombre;
+        var pp=$('pickLogoPico');if(pp)pp.innerHTML=logo?('<img src="'+logo+'" alt="'+String(nombre).replace(/"/g,'&quot;')+'">'):'🚚';
+        var pn=$('pickNombreEmpresa');if(pn)pn.textContent=nombre;
+    }catch(e){console.warn('[vendedor] no se pudo aplicar el logo de la empresa:',e);}
+}
 
 function seed(){
 if(productos.length===0){
@@ -734,12 +832,14 @@ if(btnHoy){btnHoy.textContent=filtroSoloHoy?('📅 Viendo: hoy ('+diaLabel(diaSe
 if(filtroSoloHoy){var hoy=diaSemanaHoy();lista=lista.filter(function(c){return c.diaVisita===hoy;});}
 var c=$('listaClientes');
 if(!lista.length){c.innerHTML='<div class="empty"><div class="e">👥</div><p>'+(filtroSoloHoy?'Ningún cliente tiene visita programada para hoy':'Sin clientes')+'</p></div>';return;}
+var permDiaVisita=tienePermiso('diaVisita');
 c.innerHTML=lista.map(function(c){
 var sel=['',  'lunes','martes','miercoles','jueves','viernes','sabado'].map(function(d){return '<option value="'+d+'" '+((c.diaVisita||'')===d?'selected':'')+'>'+(d===''?'Sin día':diaLabel(d))+'</option>';}).join('');
-return '<div class="cli-card '+(c.fav?'fav':'')+'"><div class="h"><div><div class="nm">'+c.nombre+'</div><div class="mt">📱 '+c.tel+' · 📍 '+c.dir+'</div></div><button class="star" data-act="fav" data-id="'+c.id+'">'+(c.fav?'⭐':'☆')+'</button></div><div class="st"><div><div class="l">Compras</div><div class="v">'+c.compras+'</div></div><div><div class="l">Total</div><div class="v">'+Format.money(c.total)+'</div></div><div><div class="l">Saldo</div><div class="v" style="color:'+(c.saldo>0?'var(--accent)':'var(--ok)')+'">'+Format.money(c.saldo||0)+'</div></div></div><div style="margin-top:8px;font-size:12px;color:var(--ink2);display:flex;align-items:center;gap:6px;">🗓️ Visita: <select onchange="cambiarDiaCliV(\''+c.id+'\',this.value)" style="padding:2px 6px;border-radius:6px;border:1px solid #ccc;font-size:12px;">'+sel+'</select></div><div style="display:flex;gap:7px;margin-top:10px;flex-wrap:wrap"><button class="btn sm ok" data-act="waCliId" data-id="'+c.id+'">💬 WhatsApp</button><button class="btn sm ghost" data-act="histCliId" data-id="'+c.id+'">📊 Historial</button><button class="btn sm brand" data-act="pedidoCli" data-id="'+c.id+'">🛒 Pedido</button><button class="btn sm info" data-act="comoLlegar" data-id="'+c.id+'">🗺️ Cómo llegar</button></div></div>';}).join('');
+var visitaHtml=permDiaVisita?('<select onchange="cambiarDiaCliV(\''+c.id+'\',this.value)" style="padding:2px 6px;border-radius:6px;border:1px solid #ccc;font-size:12px;">'+sel+'</select>'):('<b>'+(c.diaVisita?diaLabel(c.diaVisita):'Sin día')+'</b>');
+return '<div class="cli-card '+(c.fav?'fav':'')+'"><div class="h"><div><div class="nm">'+c.nombre+'</div><div class="mt">📱 '+c.tel+' · 📍 '+c.dir+'</div></div><button class="star" data-act="fav" data-id="'+c.id+'">'+(c.fav?'⭐':'☆')+'</button></div><div class="st"><div><div class="l">Compras</div><div class="v">'+c.compras+'</div></div><div><div class="l">Total</div><div class="v">'+Format.money(c.total)+'</div></div><div><div class="l">Saldo</div><div class="v" style="color:'+(c.saldo>0?'var(--accent)':'var(--ok)')+'">'+Format.money(c.saldo||0)+'</div></div></div><div style="margin-top:8px;font-size:12px;color:var(--ink2);display:flex;align-items:center;gap:6px;">🗓️ Visita: '+visitaHtml+'</div><div style="display:flex;gap:7px;margin-top:10px;flex-wrap:wrap"><button class="btn sm ok" data-act="waCliId" data-id="'+c.id+'">💬 WhatsApp</button><button class="btn sm ghost" data-act="histCliId" data-id="'+c.id+'">📊 Historial</button><button class="btn sm brand" data-act="pedidoCli" data-id="'+c.id+'">🛒 Pedido</button><button class="btn sm info" data-act="comoLlegar" data-id="'+c.id+'">🗺️ Cómo llegar</button></div></div>';}).join('');
 }
 function pintarClientes(){pintarListaClientes();}
-function cambiarDiaCliV(id,valor){var c=cliById(id);if(!c)return;c.diaVisita=valor;DB.set('clientes',clientes);Notif.success('✅ Día de visita actualizado');if(filtroSoloHoy)pintarClientes();}
+function cambiarDiaCliV(id,valor){if(!tienePermiso('diaVisita')){Notif.error('❌ No tienes permiso para cambiar el día de visita');return;}var c=cliById(id);if(!c)return;c.diaVisita=valor;DB.set('clientes',clientes);Notif.success('✅ Día de visita actualizado');if(filtroSoloHoy)pintarClientes();}
 
 var mapaInst=null,mapaMarcadores=[];
 function pintarMapa(){
@@ -777,7 +877,7 @@ var e=ESTADO_PEDIDO_LBL[v.estado]||['',v.estado==='pendiente'?'b-warn':'b-ok'];
 var puedeEntregar=(v.estado==='pendiente'||v.estado==='pagada');
 var btns='<div style="display:flex;gap:6px;margin-top:8px;flex-wrap:wrap">'+
 (puedeEntregar?'<button class="btn sm ok" data-act="marcarEntregado" data-id="'+v.id+'">✅ Marcar entregado</button>':'')+
-'<button class="btn sm acc" data-act="abrirDevolucion" data-id="'+v.id+'">↩️ '+(v.devolucion?'Editar devolución':'Registrar devolución')+'</button>'+
+(tienePermiso('devoluciones')?('<button class="btn sm acc" data-act="abrirDevolucion" data-id="'+v.id+'">↩️ '+(v.devolucion?'Editar devolución':'Registrar devolución')+'</button>'):'')+
 '</div>';
 var devInfo=v.devolucion?('<div class="m" style="color:var(--accent)">↩️ '+(v.devolucion.tipo==='total'?'Total':'Parcial '+Format.money(v.devolucion.monto||0))+' · '+v.devolucion.motivo+(v.devolucion.obs?' · '+v.devolucion.obs:'')+'</div>'):'';
 return '<div class="vitem"><div class="h"><b>'+v.cliente+'</b><span class="badge b-info">'+v.fecha+' · '+v.hora+'</span></div><div class="m">'+v.items.map(function(it){return it.nombre+' x'+it.cant;}).join(', ')+'</div><div class="h" style="margin-top:6px"><span style="font-weight:800">'+Format.money(v.total)+'</span><span class="badge '+e[1]+'">'+(e[0]||v.pago||'')+'</span></div>'+devInfo+btns+'</div>';
@@ -793,6 +893,7 @@ Notif.success('✅ Pedido de '+v.cliente+' marcado como entregado');
 }
 var devVentaId=null;
 function abrirDevolucion(id){
+if(!tienePermiso('devoluciones')){Notif.error('❌ No tienes permiso para registrar devoluciones');return;}
 var v=ventaById(id);if(!v)return;
 devVentaId=id;
 $('devInfoPedido').textContent=v.cliente+' · '+v.fecha+' · '+Format.money(v.total);
@@ -845,6 +946,94 @@ else carrito.push({id:p.id,nombre:p.nombre,precio:p.precio,cant:1});
 $('prodResults').classList.remove('show');$('prodSearch').value='';
 pintarCarrito();pintarMenu();Notif.success('+ '+p.nombre);
 }
+
+/* ============================================================
+   PEDIR POR VOZ / POR CÁMARA (opcionales, además de buscar escribiendo)
+   ------------------------------------------------------------
+   Usan los plugins nativos Capacitor que el build de Android trae instalados
+   (@capacitor-community/speech-recognition y @capacitor-mlkit/barcode-scanning),
+   expuestos siempre en window.Capacitor.Plugins.* -no hacen falta imports ni
+   empaquetador porque Capacitor los inyecta solo en cualquier página que corra
+   dentro de la app-. Si el celular no los tiene (por ejemplo, abriendo esta
+   misma página en un navegador normal en vez de la app instalada), cada botón
+   avisa con un mensaje claro y el vendedor sigue escribiendo como siempre.
+   ============================================================ */
+function _normTxt(s){return String(s||'').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g,'').trim();}
+var _NUM_PALABRAS={uno:1,una:1,un:1,dos:2,tres:3,cuatro:4,cinco:5,seis:6,siete:7,ocho:8,nueve:9,diez:10,once:11,doce:12};
+function agregarCantidadProd(id,cantidad){
+    var p=productos.find(function(x){return x.id===id;});if(!p)return false;
+    if(p.stock<=0){Notif.warning('Sin stock de '+p.nombre);return false;}
+    var it=null;for(var i=0;i<carrito.length;i++)if(carrito[i].id===id){it=carrito[i];break;}
+    var nuevaCant=(it?it.cant:0)+cantidad;
+    if(nuevaCant>p.stock){nuevaCant=p.stock;Notif.warning('Stock máximo de '+p.nombre+': '+p.stock);}
+    if(it)it.cant=nuevaCant;else carrito.push({id:p.id,nombre:p.nombre,precio:p.precio,cant:nuevaCant});
+    pintarCarrito();pintarMenu();
+    return true;
+}
+function parseComandoVoz(texto){
+    var t=_normTxt(texto);
+    var cantidad=1;
+    var mDigit=t.match(/\b(\d+)\b/);
+    if(mDigit){cantidad=parseInt(mDigit[1],10);t=t.replace(mDigit[0],' ');}
+    else{
+        for(var palabra in _NUM_PALABRAS){
+            var re=new RegExp('\\b'+palabra+'\\b');
+            if(re.test(t)){cantidad=_NUM_PALABRAS[palabra];t=t.replace(re,' ');break;}
+        }
+    }
+    ['agrega','agregar','anade','anadir','pon','ponme','quiero','pedido','pedir','de','bultos','bulto','unidades','unidad','bolsas','bolsa','cajas','caja','paquetes','paquete','por','favor'].forEach(function(w){
+        t=t.replace(new RegExp('\\b'+w+'\\b','g'),' ');
+    });
+    return {cantidad:cantidad,textoProducto:t.replace(/\s+/g,' ').trim()};
+}
+function buscarProductoPorNombre(texto){
+    var t=_normTxt(texto);if(!t)return null;
+    var candidatos=productos.filter(function(p){var n=_normTxt(p.nombre);return n.indexOf(t)!==-1||t.indexOf(n)!==-1;});
+    if(!candidatos.length)return null;
+    candidatos.sort(function(a,b){return _normTxt(a.nombre).length-_normTxt(b.nombre).length;});
+    return candidatos[0];
+}
+function pedirPorVoz(){
+    var SR=window.Capacitor&&window.Capacitor.Plugins&&window.Capacitor.Plugins.SpeechRecognition;
+    if(!SR){Notif.warning('⚠️ El micrófono para pedidos por voz no está disponible en esta copia de la app.');return;}
+    (async function(){
+        try{
+            var disp=await SR.available();
+            if(!disp||!disp.available){Notif.warning('Este celular no tiene reconocimiento de voz disponible.');return;}
+            var permiso=await SR.requestPermissions();
+            if(!permiso||permiso.speechRecognition!=='granted'){Notif.warning('Hace falta darle permiso de micrófono a la app (en Ajustes del celular → Apps → DISTRIMARKET Vendedor → Permisos).');return;}
+            Notif.info('🎤 Escuchando... di algo como "agrega 3 Canamor"');
+            var res=await SR.start({language:'es-CO',popup:true,partialResults:false,prompt:'Di el pedido, ejemplo: agrega 3 Canamor'});
+            var texto=(res&&res.matches&&res.matches[0])||'';
+            if(!texto){Notif.warning('No se entendió nada. Intenta de nuevo o escribe el producto.');return;}
+            var parsed=parseComandoVoz(texto);
+            var prod=buscarProductoPorNombre(parsed.textoProducto);
+            if(!prod){Notif.warning('Escuché: "'+texto+'" pero no encontré ese producto. Intenta de nuevo o búscalo escribiendo.');return;}
+            if(agregarCantidadProd(prod.id,parsed.cantidad))Notif.success('🎤 Agregado por voz: '+parsed.cantidad+' x '+prod.nombre);
+        }catch(e){console.warn('[vendedor] error en reconocimiento de voz:',e);Notif.error('⚠️ No se pudo usar el micrófono: '+(e&&e.message?e.message:e));}
+    })();
+}
+function pedirPorCamara(){
+    var BS=window.Capacitor&&window.Capacitor.Plugins&&window.Capacitor.Plugins.BarcodeScanner;
+    if(!BS){Notif.warning('⚠️ El escáner de código de barras no está disponible en esta copia de la app.');return;}
+    (async function(){
+        try{
+            var disp=await BS.isGoogleBarcodeScannerModuleAvailable();
+            if(disp&&disp.available===false){
+                Notif.info('Preparando el escáner por primera vez (puede tardar unos segundos)...');
+                await BS.installGoogleBarcodeScannerModule();
+            }
+            var res=await BS.scan();
+            var codigos=(res&&res.barcodes)||[];
+            if(!codigos.length){Notif.warning('No se detectó ningún código.');return;}
+            var valor=codigos[0].rawValue||codigos[0].displayValue||'';
+            var prod=productos.find(function(p){return p.barras&&String(p.barras).trim()===String(valor).trim();});
+            if(!prod){Notif.warning('Código escaneado ('+valor+') pero ningún producto tiene ese código de barras registrado. Pídele al administrador que lo agregue en Productos.');return;}
+            if(agregarCantidadProd(prod.id,1))Notif.success('📷 Agregado por cámara: '+prod.nombre);
+        }catch(e){console.warn('[vendedor] error escaneando código:',e);Notif.error('⚠️ No se pudo usar la cámara: '+(e&&e.message?e.message:e));}
+    })();
+}
+
 function pintarCarrito(){
 var c=$('carrito');
 if(!carrito.length){c.innerHTML='<div class="empty"><div class="e">🛒</div><p>Aún no agregas productos</p></div>';$('totalbar').style.display='none';$('cardRes').style.opacity='.5';$('cardRes').style.pointerEvents='none';return;}
@@ -932,6 +1121,7 @@ $('gpsBtn').textContent='✅ '+g;Notif.success('Ubicación capturada');
 /* ===== Nuevo cliente (registrado directamente desde la app del vendedor) ===== */
 var cliGeoCapturadaV=null;
 function toggleNuevoCli(){
+if(!tienePermiso('nuevoCliente')){Notif.error('❌ No tienes permiso para registrar clientes nuevos');return;}
 var f=$('formNuevoCliente');
 var abrir=f.style.display==='none';
 f.style.display=abrir?'block':'none';
@@ -988,6 +1178,14 @@ var vh=ventasHoy();var vm=ventasMes();var totM=vm.reduce(function(s,v){return s+
 $('pVHoy').textContent=Format.money(vh.reduce(function(s,v){return s+v.total;},0));
 $('pPHoy').textContent=vh.length;$('pVMes').textContent=Format.money(totM);
 $('pCump').textContent=Math.round(totM/meta*100)+'%';
+var va=vendedorActualObj();
+if(va){
+$('pNombre').textContent=va.nombre;
+$('pZona').textContent='Vendedor · Zona '+(va.zona?(va.zona.charAt(0).toUpperCase()+va.zona.slice(1)):'-');
+}else{
+$('pNombre').textContent='Vendedor DISTRIMARKET';
+$('pZona').textContent=DB.get('vendedores',[]).length?'Sin identificar · toca "Cambiar vendedor"':'Vendedor';
+}
 }
 
 function histCliente(id){
@@ -999,13 +1197,77 @@ else html+=vc.slice(0,15).map(function(v){return '<div class="vitem"><div class=
 $('histBody').innerHTML=html;$('modalHist').classList.add('on');
 }
 
+/* Convierte el data-URI del logo (data:image/png;base64,....) a la extensión que ExcelJS
+   necesita para incrustarlo. Si el formato no es uno de los que ExcelJS soporta (solo png/
+   jpeg/gif), se omite el logo del Excel en vez de romper toda la exportación. */
+function _datosLogoParaExcel(dataUri){
+    // ExcelJS pide el código base64 PURO (sin el "data:image/png;base64," de adelante).
+    // Antes se le mandaba el data-URI completo tal cual lo guarda logo-empresa.js (con el
+    // prefijo incluido) y la imagen quedaba corrupta -por eso nunca aparecía en el Excel,
+    // aunque tampoco diera ningún error visible-.
+    var m=/^data:image\/(\w+);base64,(.+)$/.exec(dataUri||'');
+    if(!m)return null;
+    var t=m[1].toLowerCase();
+    if(t==='jpg')t='jpeg';
+    if(['png','jpeg','gif'].indexOf(t)===-1)return null;
+    return {extension:t,base64:m[2]};
+}
 function exportTodo(){
-if(typeof XLSX==='undefined'){Notif.error('Librería Excel no cargó');return;}
-var wb=XLSX.utils.book_new();
-XLSX.utils.book_append_sheet(wb,XLSX.utils.json_to_sheet(ventas.map(function(v){return {Fecha:v.fecha,Hora:v.hora,Cliente:v.cliente,Total:v.total,Pago:v.pago,Estado:v.estado};})),'Ventas');
-XLSX.utils.book_append_sheet(wb,XLSX.utils.json_to_sheet(clientes.map(function(c){return {Nombre:c.nombre,Doc:c.doc,Telefono:c.tel,Zona:c.zona,DiaVisita:c.diaVisita?diaLabel(c.diaVisita):'',Compras:c.compras,Total:c.total,Saldo:c.saldo};})),'Clientes');
-XLSX.utils.book_append_sheet(wb,XLSX.utils.json_to_sheet(visitas.map(function(v){return {Fecha:v.fecha,Cliente:v.cliente,Tipo:v.tipo,Resultado:v.res,Motivo:v.motivo||'',Obs:v.obs};})),'Visitas');
-XLSX.writeFile(wb,'Vendedor_'+hoyISO()+'.xlsx');Notif.success('Exportado a Excel');
+if(typeof ExcelJS==='undefined'){Notif.error('⚠️ No se pudo cargar la función de Excel (hace falta internet la primera vez). Conéctate a internet e intenta de nuevo.');return;}
+Notif.info('Generando Excel...');
+var va=vendedorActualObj();var nombreVend=va?va.nombre:'(sin asignar)';
+var logoUri=(window.LogoEmpresa?LogoEmpresa.get().logo:null)||DB.get('empresaLogo',null);
+var nombreEmpresa=(window.LogoEmpresa?LogoEmpresa.get().nombre:null)||DB.get('empresaNombre',null)||'DISTRIMARKET';
+var wb=new ExcelJS.Workbook();
+wb.creator=nombreEmpresa;
+/* ---- Portada: logo + nombre de la empresa + vendedor + fecha ---- */
+var portada=wb.addWorksheet('Portada');
+portada.getColumn(1).width=4;portada.getColumn(2).width=44;
+var filaTexto=2;
+if(logoUri){
+    var datosLogo=_datosLogoParaExcel(logoUri);
+    if(datosLogo){
+        try{
+            var imgId=wb.addImage({base64:datosLogo.base64,extension:datosLogo.extension});
+            portada.addImage(imgId,{tl:{col:1,row:1},ext:{width:170,height:95}});
+            filaTexto=8;
+        }catch(e){console.warn('[vendedor] no se pudo incrustar el logo en el Excel:',e);}
+    }else{
+        console.warn('[vendedor] el logo guardado no está en un formato que Excel pueda incrustar (solo png/jpeg/gif).');
+    }
+}
+portada.getCell('B'+filaTexto).value=nombreEmpresa;
+portada.getCell('B'+filaTexto).font={size:16,bold:true};
+portada.getCell('B'+(filaTexto+1)).value='Reporte del vendedor';
+portada.getCell('B'+(filaTexto+1)).font={size:12,italic:true,color:{argb:'FF667EEA'}};
+portada.getCell('B'+(filaTexto+3)).value='Vendedor:';
+portada.getCell('B'+(filaTexto+3)).font={bold:true};
+portada.getCell('C'+(filaTexto+3)).value=nombreVend;
+portada.getCell('B'+(filaTexto+4)).value='Fecha del reporte:';
+portada.getCell('B'+(filaTexto+4)).font={bold:true};
+portada.getCell('C'+(filaTexto+4)).value=Format.date(hoyISO());
+/* ---- Hojas de datos (todas con el nombre del vendedor en cada fila) ---- */
+var hVentas=wb.addWorksheet('Ventas');
+hVentas.columns=[{header:'Vendedor',key:'Vendedor',width:20},{header:'Fecha',key:'Fecha',width:12},{header:'Hora',key:'Hora',width:10},{header:'Cliente',key:'Cliente',width:24},{header:'Total',key:'Total',width:14},{header:'Pago',key:'Pago',width:14},{header:'Estado',key:'Estado',width:14}];
+ventas.forEach(function(v){hVentas.addRow({Vendedor:nombreVend,Fecha:v.fecha,Hora:v.hora,Cliente:v.cliente,Total:v.total,Pago:v.pago,Estado:v.estado});});
+hVentas.getRow(1).font={bold:true};
+var hClientes=wb.addWorksheet('Clientes');
+hClientes.columns=[{header:'Vendedor',key:'Vendedor',width:20},{header:'Nombre',key:'Nombre',width:24},{header:'Doc',key:'Doc',width:14},{header:'Telefono',key:'Telefono',width:14},{header:'Zona',key:'Zona',width:14},{header:'DiaVisita',key:'DiaVisita',width:14},{header:'Compras',key:'Compras',width:10},{header:'Total',key:'Total',width:14},{header:'Saldo',key:'Saldo',width:14}];
+clientes.forEach(function(c){hClientes.addRow({Vendedor:nombreVend,Nombre:c.nombre,Doc:c.doc,Telefono:c.tel,Zona:c.zona,DiaVisita:c.diaVisita?diaLabel(c.diaVisita):'',Compras:c.compras,Total:c.total,Saldo:c.saldo});});
+hClientes.getRow(1).font={bold:true};
+var hVisitas=wb.addWorksheet('Visitas');
+hVisitas.columns=[{header:'Vendedor',key:'Vendedor',width:20},{header:'Fecha',key:'Fecha',width:12},{header:'Cliente',key:'Cliente',width:24},{header:'Tipo',key:'Tipo',width:14},{header:'Resultado',key:'Resultado',width:14},{header:'Motivo',key:'Motivo',width:18},{header:'Obs',key:'Obs',width:24}];
+visitas.forEach(function(v){hVisitas.addRow({Vendedor:nombreVend,Fecha:v.fecha,Cliente:v.cliente,Tipo:v.tipo,Resultado:v.res,Motivo:v.motivo||'',Obs:v.obs});});
+hVisitas.getRow(1).font={bold:true};
+wb.xlsx.writeBuffer().then(function(buffer){
+    var blob=new Blob([buffer],{type:'application/octet-stream'});
+    var url=URL.createObjectURL(blob);
+    var a=document.createElement('a');
+    a.href=url;a.download='Vendedor_'+(nombreVend&&nombreVend!=='(sin asignar)'?(nombreVend.replace(/[^a-zA-Z0-9]+/g,'_')+'_'):'')+hoyISO()+'.xlsx';
+    document.body.appendChild(a);a.click();document.body.removeChild(a);
+    setTimeout(function(){URL.revokeObjectURL(url);},1500);
+    Notif.success('Exportado a Excel');
+}).catch(function(e){console.error('[vendedor] fallo generando el Excel:',e);Notif.error('⚠️ No se pudo generar el Excel: '+(e&&e.message?e.message:e));});
 }
 function compartir(){
 var url=location.href;var txt='📲 App DISTRIMARKET Vendedor: '+url;
@@ -1023,13 +1285,13 @@ function sync(){
     if(!cfg||!cfg.apiKey||!cfg.projectId){ Notif.warning('Todavía no hay conexión a la nube configurada. Pídele al administrador que la active en Configuración → Avanzado.'); return; }
     if(!FBConfig.isSync()){ Notif.warning('La sincronización en la nube está desactivada desde Configuración.'); return; }
     Notif.info('Sincronizando con la nube...');
-    FBConfig.syncNow({pull:['productos','clientes'],push:['clientes','ventasV','visitasV','metaV']},function(res){
+    FBConfig.syncNow({pull:['productos','clientes','vendedores','empresaLogo','empresaNombre'],push:['clientes','ventasV','visitasV','metaV']},function(res){
         if(!res||!res.ok){
             var motivos={sin_credenciales:'sin credenciales configuradas',sin_conexion:'sin conexión con el servidor',sincronizacion_desactivada:'sincronización desactivada',error:'un error inesperado'};
             Notif.error('⚠️ No se pudo sincronizar: '+(motivos[res&&res.motivo]||(res&&res.error)||'motivo desconocido'));
             return;
         }
-        try{recargarDatosLocales();}catch(e){console.warn('[vendedor] la sincronización fue real, pero repintar la pantalla falló:',e);}
+        try{recargarDatosLocales();aplicarLogoEmpresa();}catch(e){console.warn('[vendedor] la sincronización fue real, pero repintar la pantalla falló:',e);}
         var bajaron=(res.pull||[]).filter(function(r){return r.estado==='actualizado_desde_la_nube';}).length;
         var subieron=(res.push||[]).filter(function(r){return r.estado==='subido';}).length;
         var errores=(res.pull||[]).concat(res.push||[]).filter(function(r){return r.estado==='error';});
@@ -1044,10 +1306,12 @@ function recargarDatosLocales(){
     productos=DB.get('productos',[]);
     clientes=DB.get('clientes',[]);
     normalizarClientes();
+    vendedores=DB.get('vendedores',[]);
     ventas=DB.get('ventasV',[]);
     visitas=DB.get('visitasV',[]);
     meta=DB.get('metaV',5000000);
     pintarTodo();
+    aplicarPermisosUI();
     try{ if(typeof renderProductos==='function'){var cajaBusq=$('prodSearch');renderProductos(cajaBusq?cajaBusq.value:'');} }catch(e){}
 }
 function compartirResumenDia(){
@@ -1112,7 +1376,10 @@ case 'marcarEntregado': marcarEntregado(id); break;
 case 'abrirDevolucion': abrirDevolucion(id); break;
 case 'guardarDevolucion': guardarDevolucion(); break;
 case 'closeModalDev': $('modalDevolucion').classList.remove('on'); break;
+case 'cambiarVendedor': cambiarVendedor(); break;
 case 'toggleSoloHoy': filtroSoloHoy=!filtroSoloHoy; pintarClientes(); break;
+case 'pedirPorVoz': pedirPorVoz(); break;
+case 'pedirPorCamara': pedirPorCamara(); break;
 }
 });
 
@@ -1138,7 +1405,7 @@ function toggleDark(){var on=document.body.classList.toggle('dark');localStorage
 function init(){
 seed();
 if(localStorage.getItem('darkV')==='1'){document.body.classList.add('dark');$('darkBtn').textContent='☀️';if($('darkToggle'))$('darkToggle').textContent='Desactivar';}
-$('hWho').textContent='Carlos Pérez · Zona Norte';
+$('hWho').textContent='Vendedor DISTRIMARKET';
 bindAC('cliSearch','cliResults','cliente');
 bindAC('cliSearch2','cliResults2','cliente2');
 bindAC('prodSearch','prodResults','prod');
@@ -1148,6 +1415,19 @@ if($('pedBuscar'))$('pedBuscar').addEventListener('input',function(){pintarPedid
 if($('visRes'))$('visRes').addEventListener('change',function(){$('wrapVisMotivo').style.display=(this.value==='No compró')?'block':'none';});
 if($('devTipo'))$('devTipo').addEventListener('change',function(){$('wrapDevMonto').style.display=(this.value==='parcial')?'block':'none';});
 $('fechaEnt').value=hoyISO();
+var pickOv=$('pickVendedorOverlay');
+if(pickOv)pickOv.addEventListener('click',function(e){
+var b=e.target.closest('[data-pick-vendedor]');if(!b)return;
+var id=b.getAttribute('data-pick-vendedor');
+if(id==='__skip')DB.set('vendedorActualId','__none__');
+else elegirVendedor(id);
+pickOv.style.display='none';
+aplicarPermisosUI();
+pintarTodo();
+});
+mostrarPickVendedorSiHaceFalta();
+aplicarPermisosUI();
+aplicarLogoEmpresa();
 pintarTodo();
 setupReveal();
 console.log('%c[vendedor] listo ✓','color:#10b981;font-weight:bold');
@@ -1161,10 +1441,10 @@ function intentarSyncSilenciosa(){
         if(!window.FBConfig) return;
         var cfg=FBConfig.getConfig();
         if(!cfg||!cfg.apiKey||!cfg.projectId||!FBConfig.isSync()) return;
-        FBConfig.syncNow({pull:['productos','clientes'],push:['clientes','ventasV','visitasV','metaV']},function(res){
+        FBConfig.syncNow({pull:['productos','clientes','vendedores','empresaLogo','empresaNombre'],push:['clientes','ventasV','visitasV','metaV']},function(res){
             if(res&&res.ok){
                 var bajaron=(res.pull||[]).filter(function(r){return r.estado==='actualizado_desde_la_nube';}).length;
-                if(bajaron){try{recargarDatosLocales();}catch(e){console.warn('[vendedor] sync silenciosa: repintar falló',e);}Notif.info('📦 Catálogo actualizado desde la oficina');}
+                if(bajaron){try{recargarDatosLocales();aplicarPermisosUI();aplicarLogoEmpresa();mostrarPickVendedorSiHaceFalta();}catch(e){console.warn('[vendedor] sync silenciosa: repintar falló',e);}Notif.info('📦 Catálogo actualizado desde la oficina');}
             }
         });
     }catch(e){}
@@ -1172,5 +1452,6 @@ function intentarSyncSilenciosa(){
 document.addEventListener('DOMContentLoaded',init);
 </script>
 <script src="firebase-config.js"></script>
+<script src="logo-empresa.js"></script>
 </body>
 </html>
