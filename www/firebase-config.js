@@ -405,6 +405,30 @@ function currentUser() {
 }
 
 /* ============================================================
+   5-bis) TOKEN DE NOTIFICACIONES PUSH DEL VENDEDOR
+   ------------------------------------------------------------
+   Cuando el celular del vendedor se registra para recibir
+   notificaciones push (productos nuevos, cambios de precio,
+   ofertas), su "token" de celular se guarda aqui, en Firestore,
+   coleccion vendedor_tokens (un documento por celular, el id del
+   documento es el propio token). Asi, push.php (en Hostinger)
+   puede leer esta lista y mandarle la notificacion a cada celular.
+   ============================================================ */
+function guardarTokenPush(obj) {
+    return new Promise(function (resolve) {
+        if (!fbOnline || !fbDb) { resolve(false); return; }
+        try {
+            fbDb.collection('vendedor_tokens').doc(String(obj.token)).set({
+                token: obj.token,
+                vendedorId: obj.vendedorId || '',
+                vendedorNombre: obj.vendedorNombre || '',
+                actualizado: window.firebase.firestore.FieldValue.serverTimestamp()
+            }, { merge: true }).then(function () { resolve(true); }).catch(function () { resolve(false); });
+        } catch (e) { resolve(false); }
+    });
+}
+
+/* ============================================================
    6) API PUBLICA: window.FBConfig
    ============================================================ */
 window.FBConfig = {
@@ -430,6 +454,7 @@ window.FBConfig = {
     isSync: function () { return fbSync; },
     getConfig: function () { return mergeCfg(); },
     currentUser: currentUser,
+    guardarTokenPush: guardarTokenPush,
     // fuerza un re-chequeo (util tras pegar credenciales). cb(ok, mensaje) opcional: avisa el resultado real.
     reconnect: function (cb) { fbOnline = false; fbDb = null; fbApp = null; initFirebase(cb); },
     // Sincronizacion real en dos sentidos. opts: { pull:[claves a traer de la nube si son mas nuevas],
