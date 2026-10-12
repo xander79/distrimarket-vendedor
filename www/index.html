@@ -243,6 +243,16 @@ body.dark .toast-demo{color:#fbbf24}
 <div class="kpi warn reveal"><div class="l"><span class="e">📈</span> Cumplimiento</div><div class="v" id="kCump">0%</div></div>
 </div>
 
+<div class="card reveal" id="cardRuta" style="background:linear-gradient(135deg,var(--brand),var(--violet));color:#fff;border:none">
+<div style="display:flex;justify-content:space-between;align-items:center;gap:10px">
+<div>
+<div style="font-size:12px;opacity:.85;text-transform:uppercase;letter-spacing:.5px">Tu ruta de hoy</div>
+<div style="font-size:15px;font-weight:700;margin-top:2px" id="rutaEstadoTxt">Sin iniciar</div>
+</div>
+<button class="btn sm" style="background:#fff;color:var(--brand);white-space:nowrap" id="btnRuta" data-act="toggleRuta">▶️ Iniciar ruta</button>
+</div>
+</div>
+
 <div class="toast-demo reveal" id="demoBar"><span class="e">💡</span> <span>Estás viendo datos de ejemplo. Cuando tengas ventas reales, aparecerán aquí.</span> <button class="btn sm warn" data-act="reloadDemo" style="margin-left:auto">Recargar demo</button></div>
 
 <div class="chart-card reveal"><h3><span class="e">💰</span> Ventas de los últimos 7 días</h3><div class="chart-box" id="boxVentas"><canvas id="cVentas"></canvas></div></div>
@@ -575,6 +585,56 @@ function tienePermiso(key){
 var va=vendedorActualObj();
 if(!va||!va.permisos)return true;
 return va.permisos[key]!==false;
+}
+
+/* ===== Avisos por correo al administrador (inicio/fin de ruta, pedido, no compró) =====
+   Se mandan a un archivo PHP en el hosting de DISTRIMARKET, que a su vez manda el
+   correo real por Zoho. Si el celular no tiene internet en ese momento, el aviso
+   simplemente no llega (no se reintenta ni se guarda para después), pero nunca
+   interrumpe lo que el vendedor está haciendo en la app. */
+var AVISO_URL='https://distrimarketat.com/avisos/avisos.php';
+var AVISO_CLAVE='89d9cca1d923b8bd55042fa017b1d2af46c961fecdf16c52';
+function enviarAvisoAdmin(evento,datos){
+    try{
+        fetch(AVISO_URL,{
+            method:'POST',
+            headers:{'Content-Type':'application/json'},
+            body:JSON.stringify({clave:AVISO_CLAVE,evento:evento,datos:datos})
+        }).catch(function(e){console.warn('[vendedor] no se pudo avisar al administrador:',e);});
+    }catch(e){console.warn('[vendedor] fallo al armar el aviso:',e);}
+}
+
+/* ===== Ruta del día (inicio/fin) ===== */
+var rutaActiva=DB.get('rutaActivaV',null);
+function pintarRuta(){
+    var txt=$('rutaEstadoTxt'),btn=$('btnRuta');
+    if(!txt||!btn)return;
+    if(rutaActiva&&rutaActiva.inicio){
+        var mins=Math.round((Date.now()-new Date(rutaActiva.inicio).getTime())/60000);
+        txt.textContent='En curso · desde las '+new Date(rutaActiva.inicio).toLocaleTimeString('es-CO').slice(0,5)+' ('+mins+' min)';
+        btn.textContent='⏹️ Terminar ruta';
+    }else{
+        txt.textContent='Sin iniciar';
+        btn.textContent='▶️ Iniciar ruta';
+    }
+}
+function toggleRuta(){
+    var va=vendedorActualObj();var nombreVend=va?va.nombre:'(sin asignar)';
+    if(rutaActiva&&rutaActiva.inicio){
+        var h=hoyISO();
+        var ventasHoy=ventas.filter(function(v){return v.fecha===h;});
+        var totalHoy=ventasHoy.reduce(function(s,v){return s+v.total;},0);
+        var visitasHoy=visitas.filter(function(v){return v.fecha===h;});
+        enviarAvisoAdmin('fin_ruta',{vendedor:nombreVend,inicio:rutaActiva.inicio,fin:new Date().toISOString(),pedidos:ventasHoy.length,totalVentas:totalHoy,visitas:visitasHoy.length});
+        rutaActiva=null;DB.set('rutaActivaV',null);
+        Notif.success('Ruta terminada');
+    }else{
+        rutaActiva={inicio:new Date().toISOString()};
+        DB.set('rutaActivaV',rutaActiva);
+        enviarAvisoAdmin('inicio_ruta',{vendedor:nombreVend,inicio:rutaActiva.inicio});
+        Notif.success('Ruta iniciada');
+    }
+    pintarRuta();
 }
 function mostrarPickVendedorSiHaceFalta(){
 var vs=DB.get('vendedores',[]);
@@ -1065,6 +1125,7 @@ ventas.push(v);DB.set('ventasV',ventas);
 cliSel.compras=(cliSel.compras||0)+1;cliSel.total=(cliSel.total||0)+tot;cliSel.ultima=hoyISO();
 if(v.pago==='Crédito')cliSel.saldo=(cliSel.saldo||0)+tot;
 DB.set('clientes',clientes);
+enviarAvisoAdmin('pedido',{vendedor:(vendedorActualObj()?vendedorActualObj().nombre:'(sin asignar)'),cliente:cliSel.nombre,pago:v.pago,total:tot,items:carrito.map(function(it){return{nombre:it.nombre,cant:it.cant,precio:it.precio};})});
 if(modoWa){
 var msg='🛒 *Pedido DISTRIMARKET*\nCliente: '+cliSel.nombre+'\n\n';
 carrito.forEach(function(it){msg+='• '+it.nombre+' x'+it.cant+' = '+Format.money(it.precio*it.cant)+'\n';});
@@ -1111,8 +1172,12 @@ distM=Math.round(distanciaMetros(parseFloat(p[0]),parseFloat(p[1]),visCliSel.lat
 lejos=distM>300;
 }
 var resVis=$('visRes').value;
-visitas.push({id:'VI'+Date.now(),fecha:hoyISO(),hora:$('visHora').value||new Date().toLocaleTimeString('es-CO').slice(0,5),clienteId:visCliSel.id,cliente:visCliSel.nombre,tipo:$('visTipo').value,res:resVis,motivo:(resVis==='No compró'?$('visMotivo').value:''),obs:$('visObs').value,gps:visCliSel._gps||'',distanciaM:distM,lejos:lejos});
+var visCliNombre=visCliSel.nombre,visObsTxt=$('visObs').value;
+visitas.push({id:'VI'+Date.now(),fecha:hoyISO(),hora:$('visHora').value||new Date().toLocaleTimeString('es-CO').slice(0,5),clienteId:visCliSel.id,cliente:visCliNombre,tipo:$('visTipo').value,res:resVis,motivo:(resVis==='No compró'?$('visMotivo').value:''),obs:visObsTxt,gps:visCliSel._gps||'',distanciaM:distM,lejos:lejos});
 DB.set('visitasV',visitas);
+if(resVis==='No compró'){
+    enviarAvisoAdmin('no_compro',{vendedor:(vendedorActualObj()?vendedorActualObj().nombre:'(sin asignar)'),cliente:visCliNombre,motivo:$('visMotivo').value,obs:visObsTxt});
+}
 $('visObs').value='';$('visCliSearch').value='';visCliSel=null;
 $('wrapVisMotivo').style.display='none';
 pintarVisitas();pintarMenu();
@@ -1218,8 +1283,10 @@ function abrirNoCompra(id){
 }
 function guardarNoCompra(){
     var c=cliById(noComproCliId);if(!c){Notif.error('Cliente no encontrado');return;}
-    visitas.push({id:'VI'+Date.now(),fecha:hoyISO(),hora:new Date().toLocaleTimeString('es-CO').slice(0,5),clienteId:c.id,cliente:c.nombre,tipo:'Venta',res:'No compró',motivo:$('ncMotivo').value,obs:$('ncObs').value,gps:'',distanciaM:null,lejos:false});
+    var motivo=$('ncMotivo').value,obs=$('ncObs').value;
+    visitas.push({id:'VI'+Date.now(),fecha:hoyISO(),hora:new Date().toLocaleTimeString('es-CO').slice(0,5),clienteId:c.id,cliente:c.nombre,tipo:'Venta',res:'No compró',motivo:motivo,obs:obs,gps:'',distanciaM:null,lejos:false});
     DB.set('visitasV',visitas);
+    enviarAvisoAdmin('no_compro',{vendedor:(vendedorActualObj()?vendedorActualObj().nombre:'(sin asignar)'),cliente:c.nombre,motivo:motivo,obs:obs});
     $('modalNoCompra').classList.remove('on');
     pintarVisitas();pintarMenu();
     Notif.success('Guardado: '+c.nombre+' no compró');
@@ -1391,7 +1458,7 @@ if(navigator.share){navigator.share({title:'Resumen del día - DISTRIMARKET',tex
 else{window.open('https://wa.me/?text='+encodeURIComponent(txt),'_blank');}
 }
 
-function pintarTodo(){pintarDashboard();pintarClientes();pintarVisitas();pintarMetas();pintarPerfil();pintarMenu();if($('m-pedidos'))$('m-pedidos').textContent=ventas.length;}
+function pintarTodo(){pintarDashboard();pintarClientes();pintarVisitas();pintarMetas();pintarPerfil();pintarMenu();pintarRuta();if($('m-pedidos'))$('m-pedidos').textContent=ventas.length;}
 
 /* ===== scroll reveal ===== */
 function revealAll(){var els=document.querySelectorAll('.tab.on .reveal');for(var i=0;i<els.length;i++)els[i].classList.add('in');}
@@ -1452,6 +1519,7 @@ case 'noCompraId': abrirNoCompra(id); break;
 case 'noCompraCli': if(cliSel)abrirNoCompra(cliSel.id); break;
 case 'closeModalNoCompra': $('modalNoCompra').classList.remove('on'); break;
 case 'guardarNoCompra': guardarNoCompra(); break;
+case 'toggleRuta': toggleRuta(); break;
 }
 });
 
