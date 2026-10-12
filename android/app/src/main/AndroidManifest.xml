@@ -43,4 +43,6 @@
          aparte de que el vendedor también debe aceptarlo la primera vez que se lo pida. -->
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+    <!-- Para "🎤 Por voz" al tomar un pedido (reconocimiento de voz del celular). -->
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
 </manifest>
