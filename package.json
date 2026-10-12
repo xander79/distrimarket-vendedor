@@ -10,6 +10,8 @@
   "author": "",
   "license": "ISC",
   "dependencies": {
+    "@capacitor-community/speech-recognition": "^6.0.1",
+    "@capacitor-mlkit/barcode-scanning": "^6.2.0",
     "@capacitor/android": "6.1.2",
     "@capacitor/cli": "6.1.2",
     "@capacitor/core": "6.1.2"
