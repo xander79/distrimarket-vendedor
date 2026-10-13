@@ -589,19 +589,40 @@ return va.permisos[key]!==false;
 
 /* ===== Avisos por correo al administrador (inicio/fin de ruta, pedido, no compró) =====
    Se mandan a un archivo PHP en el hosting de DISTRIMARKET, que a su vez manda el
-   correo real por Zoho. Si el celular no tiene internet en ese momento, el aviso
-   simplemente no llega (no se reintenta ni se guarda para después), pero nunca
-   interrumpe lo que el vendedor está haciendo en la app. */
+   correo real por Zoho. Si el celular no tiene internet (o la señal falla) en ese
+   momento, el aviso se guarda en una "cola" local y se reintenta solo más tarde
+   (al abrir la app de nuevo, o cada par de minutos mientras esté abierta) - nunca
+   se pierde en silencio, y nunca interrumpe lo que el vendedor está haciendo. */
 var AVISO_URL='https://distrimarketat.com/avisos/avisos/avisos.php';
 var AVISO_CLAVE='89d9cca1d923b8bd55042fa017b1d2af46c961fecdf16c52';
-function enviarAvisoAdmin(evento,datos){
+function avisosPendientesCola(){return DB.get('avisosPendientes',[]);}
+function guardarAvisoPendiente(evento,datos){
+    try{
+        var cola=avisosPendientesCola();
+        cola.push({evento:evento,datos:datos,ts:Date.now()});
+        if(cola.length>30)cola=cola.slice(-30);
+        DB.set('avisosPendientes',cola);
+    }catch(e){console.warn('[vendedor] no se pudo encolar el aviso pendiente:',e);}
+}
+function intentarEnvioAviso(evento,datos,siFallaGuardar){
     try{
         fetch(AVISO_URL,{
             method:'POST',
             headers:{'Content-Type':'application/json'},
             body:JSON.stringify({clave:AVISO_CLAVE,evento:evento,datos:datos})
-        }).catch(function(e){console.warn('[vendedor] no se pudo avisar al administrador:',e);});
-    }catch(e){console.warn('[vendedor] fallo al armar el aviso:',e);}
+        }).then(function(r){return r.json().catch(function(){return null;});}).then(function(j){
+            if(!j||!j.ok){if(siFallaGuardar)guardarAvisoPendiente(evento,datos);}
+        }).catch(function(e){console.warn('[vendedor] no se pudo avisar al administrador:',e);if(siFallaGuardar)guardarAvisoPendiente(evento,datos);});
+    }catch(e){console.warn('[vendedor] fallo al armar el aviso:',e);if(siFallaGuardar)guardarAvisoPendiente(evento,datos);}
+}
+function enviarAvisoAdmin(evento,datos){
+    intentarEnvioAviso(evento,datos,true);
+}
+function reintentarAvisosPendientes(){
+    var cola=avisosPendientesCola();
+    if(!cola.length)return;
+    DB.set('avisosPendientes',[]);
+    cola.forEach(function(item){intentarEnvioAviso(item.evento,item.datos,true);});
 }
 
 /* ===== Ruta del día (inicio/fin) ===== */
@@ -752,7 +773,12 @@ function ventasHoy(){var h=hoyISO();return ventas.filter(function(v){return v.fe
 function ventasMes(){var m=mesActual();return ventas.filter(function(v){return v.fecha.slice(0,7)===m;});}
 function animNum(el,to,pref){if(!el)return;pref=pref||'';var from=0;var t0=performance.now();var dur=650;function step(t){var p=Math.min(1,(t-t0)/dur);var val=Math.round(from+(to-from)*(1-Math.pow(1-p,3)));el.textContent=pref+val.toLocaleString('es-CO');if(p<1)requestAnimationFrame(step);}requestAnimationFrame(step);}
 
+var PANTALLAS_REQUIEREN_RUTA=['clientes','pedido','visitas','mapa'];
 function go(name){
+if(PANTALLAS_REQUIEREN_RUTA.indexOf(name)!==-1 && !(rutaActiva&&rutaActiva.inicio)){
+    Notif.error('▶️ Primero debes iniciar tu ruta para ver esto');
+    name='dashboard';
+}
 var tabs=document.querySelectorAll('.tab');for(var i=0;i<tabs.length;i++)tabs[i].classList.remove('on');
 var t=$('t-'+name);if(t)t.classList.add('on');
 var bn=document.querySelectorAll('.bnav button');for(var j=0;j<bn.length;j++){bn[j].classList.toggle('on',bn[j].getAttribute('data-go')===name);}
@@ -1572,6 +1598,9 @@ pintarTodo();
 setupReveal();
 console.log('%c[vendedor] listo ✓','color:#10b981;font-weight:bold');
 setTimeout(intentarSyncSilenciosa,1500);
+setTimeout(reintentarAvisosPendientes,2500);
+setInterval(reintentarAvisosPendientes,120000);
+window.addEventListener('online',function(){setTimeout(reintentarAvisosPendientes,1000);});
 }
 /* Al abrir la app, si ya hay nube configurada y activa, intenta traer lo nuevo de la
    oficina (catálogo/clientes) en silencio, sin molestar al vendedor con un error si no
@@ -1589,10 +1618,51 @@ function intentarSyncSilenciosa(){
         });
     }catch(e){}
 }
+/* ============================================================
+   NOTIFICACIONES PUSH (productos nuevos, cambios de precio, ofertas)
+   ------------------------------------------------------------
+   Si la app corre instalada en el celular (no en el navegador de la
+   oficina), pide permiso de notificaciones, se registra en Firebase
+   Cloud Messaging, y guarda el "token" de este celular en Firestore
+   (via FBConfig.guardarTokenPush) para que el panel de administración
+   le pueda mandar avisos reales aunque la app esté cerrada.
+   ============================================================ */
+function registrarPushSiAplica(){
+    try{
+        var esApp=window.Capacitor&&window.Capacitor.isNativePlatform&&window.Capacitor.isNativePlatform();
+        var PN=esApp&&window.Capacitor.Plugins&&window.Capacitor.Plugins.PushNotifications;
+        if(!PN) return;
+        PN.addListener('registration',function(tok){
+            var va=vendedorActualObj();
+            var intento=0;
+            function intentarGuardar(){
+                intento++;
+                if(!window.FBConfig){ if(intento<10) setTimeout(intentarGuardar,2000); return; }
+                FBConfig.guardarTokenPush({
+                    token: tok.value,
+                    vendedorId: va?va.id:'',
+                    vendedorNombre: va?va.nombre:''
+                }).then(function(ok){
+                    if(ok) console.log('%c[vendedor] registrado para notificaciones push','color:#10b981;font-weight:bold');
+                    else if(intento<10) setTimeout(intentarGuardar,2000);
+                });
+            }
+            intentarGuardar();
+        });
+        PN.addListener('registrationError',function(err){console.warn('[vendedor] error registrando notificaciones push',err);});
+        PN.addListener('pushNotificationReceived',function(n){
+            try{Notif.info((n.title?n.title+': ':'')+(n.body||''));}catch(e){}
+        });
+        PN.requestPermissions().then(function(res){
+            if(res&&res.receive==='granted') PN.register();
+            else console.warn('[vendedor] permiso de notificaciones no concedido');
+        }).catch(function(e){console.warn('[vendedor] no se pudo pedir permiso de notificaciones',e);});
+    }catch(e){console.warn('[vendedor] push no disponible',e);}
+}
 document.addEventListener('DOMContentLoaded',init);
+document.addEventListener('DOMContentLoaded',function(){setTimeout(registrarPushSiAplica,1500);});
 </script>
 <script src="firebase-config.js"></script>
 <script src="logo-empresa.js"></script>
 </body>
 </html>
-
