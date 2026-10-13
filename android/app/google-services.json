@@ -1,0 +1,40 @@
+{
+  "project_info": {
+    "project_number": "705572006338",
+    "firebase_url": "https://distrimarketat-default-rtdb.firebaseio.com",
+    "project_id": "distrimarketat",
+    "storage_bucket": "distrimarketat.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:705572006338:android:9ed0ffc2dfb8a0d94e0e5b",
+        "android_client_info": {
+          "package_name": "com.distrimarket.vendedor"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "705572006338-pfgggb6855r52r35s8toemv21s23ao8i.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyAiGpS5PoMgOWJMo_VTlh_QMtEAYK8rbJo"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "705572006338-pfgggb6855r52r35s8toemv21s23ao8i.apps.googleusercontent.com",
+              "client_type": 3
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
