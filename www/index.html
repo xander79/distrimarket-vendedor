@@ -583,9 +583,44 @@ var EMISOR_CONFIG={
     resolucionNumero:'18764092154101',
     resolucionRangoDesde:'1',
     resolucionRangoHasta:'1000',
-    resolucionVigencia:'2027-04-22'
+    resolucionVigencia:'2027-04-22',
+    cuentaBanco:'CUENTA DE AHORROS 31900027047 BANCOLOMBIA'
 };
 var CONSUMIDOR_FINAL={tipoDoc:'CC',documento:'222222222222',nombre:'Consumidor final'};
+
+/* ===== Precio e IVA de un producto, con respaldo =====
+   productos.html (Administración) guarda el precio de venta al detal como
+   "precioDetal", no como "precio". Si en algún momento ese producto llega
+   aquí sin el campo "precio" (por ejemplo recién sincronizado desde la
+   oficina), usamos precioDetal para no mostrar $0 por error. El % de
+   descuento y el código de descuento los configura SOLO el administrador
+   desde productos.html - el vendedor nunca puede cambiarlos aquí. */
+function precioBaseProd(p){
+    var v=(p.precio!=null&&p.precio!=='')?Number(p.precio):Number(p.precioDetal);
+    return isNaN(v)?0:v;
+}
+function lineaDesdeProducto(p,cant){
+    var base=precioBaseProd(p);
+    var descPct=Math.min(100,Math.max(0,Number(p.descuentoPct)||0));
+    var precioFinal=Math.round(base*(1-descPct/100));
+    return {id:p.id,nombre:p.nombre,precio:precioFinal,precioLista:base,descuentoPct:descPct,codigoDescuento:p.codigoDescuento||'',iva:(p.iva!=null?Number(p.iva):19),cant:cant};
+}
+/* ===== Total de una venta, con IVA incluido =====
+   Los precios del catálogo son "sin IVA" (así los etiqueta productos.html).
+   Antes el total que se guardaba por venta (el que usan el saldo del
+   cliente y las comisiones) no sumaba el IVA, aunque la factura impresa sí
+   lo mostraba - quedaban descuadrados entre sí. A partir de ahora el total
+   de la venta SÍ incluye el IVA, calculado línea por línea (igual que en
+   la factura: redondeando el IVA de cada línea antes de sumar) para que el
+   total cobrado, el saldo y la comisión siempre cuadren con lo impreso. */
+function totalVentaConIva(items){
+    return (items||[]).reduce(function(s,it){
+        var sub=(it.precio||0)*(it.cant||0);
+        var pctIva=(it.iva!=null?Number(it.iva):19);
+        var ivaLinea=Math.round(sub*pctIva/100);
+        return s+sub+ivaLinea;
+    },0);
+}
 var pctCom = DB.get('pctComV', 5);
 var carrito = [];
 var cliSel = null;
@@ -658,19 +693,47 @@ function reintentarAvisosPendientes(){
      que el vendedor lo mande de una vez por WhatsApp; la factura electrónica
      real sigue emitiéndose aparte, en el portal de la DIAN, con el CUFE real -
      esta app nunca genera un CUFE, porque no está conectada a la DIAN. */
-function siguienteNumeroLocal(prefijo){
+function siguienteNumeroLocal(){
     var k='facturaCorrelativoLocal';
     var n=DB.get(k,0)+1;
     DB.set(k,n);
-    return prefijo+'-'+String(n).padStart(5,'0');
+    return String(n).padStart(5,'0');
 }
 function datosAdquiriente(cli){
     if(!cli||cli.facturacion==='consumidor_final'){
         return {tipoDoc:CONSUMIDOR_FINAL.tipoDoc,documento:CONSUMIDOR_FINAL.documento,nombre:CONSUMIDOR_FINAL.nombre,
-            direccion:cli?(cli.dir||cli.direccion||''):'',telefono:cli?(cli.tel||cli.telefono||''):''};
+            direccion:cli?(cli.dir||cli.direccion||''):'',telefono:cli?(cli.tel||cli.telefono||''):'',ciudad:cli?(cli.ciudad||''):''};
     }
     return {tipoDoc:(cli.tipoDoc||'cc').toUpperCase(),documento:cli.doc||cli.documento||'',nombre:cli.nombre||'',
-        direccion:cli.dir||cli.direccion||'',telefono:cli.tel||cli.telefono||''};
+        direccion:cli.dir||cli.direccion||'',telefono:cli.tel||cli.telefono||'',ciudad:cli.ciudad||''};
+}
+function datosLogoEmpresa(){
+    try{
+        var uri=(window.LogoEmpresa?LogoEmpresa.get().logo:null)||DB.get('empresaLogo',null);
+        var nombre=(window.LogoEmpresa?LogoEmpresa.get().nombre:null)||DB.get('empresaNombre',null)||EMISOR_CONFIG.nombreComercial;
+        var m=/^data:image\/(\w+);base64,(.+)$/.exec(uri||'');
+        if(!m)return {uri:null,formato:null,nombre:nombre};
+        var t=m[1].toLowerCase();if(t==='jpg')t='jpeg';
+        if(['png','jpeg'].indexOf(t)===-1)return {uri:null,formato:null,nombre:nombre};
+        return {uri:uri,formato:t.toUpperCase(),nombre:nombre};
+    }catch(e){return {uri:null,formato:null,nombre:EMISOR_CONFIG.nombreComercial};}
+}
+/* Decide vertical/horizontal según cuántos productos hay y qué tan largos son
+   los nombres - para que la tabla (ahora con más columnas: %Desc, %IVA, IVA)
+   alcance a mostrarse completa sin apretar demasiado la Descripción. */
+function decidirOrientacionFactura(items){
+    try{
+        var jsPDF=window.jspdf.jsPDF;
+        var probe=new jsPDF({unit:'mm',format:'letter',orientation:'portrait'});
+        probe.setFont('helvetica','normal');probe.setFontSize(8);
+        var anchoDescPortrait=60;
+        if((items||[]).length>12)return 'landscape';
+        for(var i=0;i<(items||[]).length;i++){
+            var lineas=probe.splitTextToSize(String(items[i].nombre||''),anchoDescPortrait);
+            if(lineas.length>2)return 'landscape';
+        }
+        return 'portrait';
+    }catch(e){return 'portrait';}
 }
 function generarFacturaPDF(v,cli){
     if(typeof window.jspdf==='undefined'){console.warn('[vendedor] jsPDF no cargó (sin internet la primera vez que se abrió la app)');return null;}
@@ -678,53 +741,194 @@ function generarFacturaPDF(v,cli){
         var tipoFac=(cli&&cli.facturacion)||'normal';
         var esResumen=(tipoFac==='electronica'||tipoFac==='consumidor_final');
         var adq=datosAdquiriente(cli);
-        var numero=siguienteNumeroLocal(esResumen?'RES':'FV');
+        var logo=datosLogoEmpresa();
+        /* Si la venta ya tenía un número asignado (porque se está reimprimiendo
+           una venta anterior, por ejemplo desde la pantalla de administración),
+           se reutiliza ESE número en vez de pedir uno nuevo - así la factura
+           reimpresa sale idéntica a la que ya recibió el cliente. */
+        var numero=v.facturaNumero||siguienteNumeroLocal();
+        var tituloDoc=v.facturaTitulo||(esResumen?'REMISIÓN':'FACTURA');
+        var items=v.items||[];
+        var orientacion=decidirOrientacionFactura(items);
         var jsPDF=window.jspdf.jsPDF;
-        var doc=new jsPDF({unit:'mm',format:'a4'});
+        var doc=new jsPDF({unit:'mm',format:'letter',orientation:orientacion});
         var pageW=doc.internal.pageSize.getWidth();
-        var y=15;
-        doc.setFont('helvetica','bold');doc.setFontSize(13);
-        doc.text(EMISOR_CONFIG.nombreComercial,15,y);
-        doc.setFont('helvetica','normal');doc.setFontSize(9);
-        y+=5;doc.text('NIT: '+EMISOR_CONFIG.nit+' - '+EMISOR_CONFIG.razonSocial,15,y);
-        y+=4.5;doc.text(EMISOR_CONFIG.direccion+' - '+EMISOR_CONFIG.municipio,15,y);
-        y+=4.5;doc.text('Tel: '+EMISOR_CONFIG.telefono+' - '+EMISOR_CONFIG.correo,15,y);
-        var tituloDoc=esResumen?'RESUMEN DE PEDIDO':'FACTURA DE VENTA';
-        doc.setFont('helvetica','bold');doc.setFontSize(12);
-        doc.text(tituloDoc,pageW-15,15,{align:'right'});
-        doc.setFont('helvetica','normal');doc.setFontSize(9);
-        doc.text('N.: '+numero,pageW-15,20,{align:'right'});
-        doc.text('Fecha: '+v.fecha+' '+v.hora,pageW-15,24.5,{align:'right'});
-        y+=8;doc.setDrawColor(200);doc.line(15,y,pageW-15,y);
-        y+=6;doc.setFont('helvetica','bold');doc.setFontSize(10);doc.text('Cliente',15,y);
-        doc.setFont('helvetica','normal');doc.setFontSize(9);
-        y+=5;doc.text((adq.tipoDoc?adq.tipoDoc+' ':'')+adq.documento+' - '+adq.nombre,15,y);
-        if(adq.direccion){y+=4.5;doc.text('Direccion de entrega: '+adq.direccion,15,y);}
-        if(adq.telefono){y+=4.5;doc.text('Tel: '+adq.telefono,15,y);}
-        y+=4.5;doc.text('Forma de pago: '+v.pago,15,y);
-        y+=8;doc.setFont('helvetica','bold');doc.setFontSize(9);
-        doc.text('Producto',15,y);doc.text('Cant.',120,y);doc.text('Precio',145,y);doc.text('Subtotal',175,y);
-        y+=2;doc.line(15,y,pageW-15,y);
-        doc.setFont('helvetica','normal');
-        (v.items||[]).forEach(function(it){
-            y+=5;
-            if(y>270){doc.addPage();y=15;}
-            doc.text(String(it.nombre||'').substring(0,45),15,y);
-            doc.text(String(it.cant),120,y);
-            doc.text(Format.money(it.precio),145,y);
-            doc.text(Format.money(it.precio*it.cant),175,y);
-        });
-        y+=3;doc.line(15,y,pageW-15,y);
-        y+=7;doc.setFont('helvetica','bold');doc.setFontSize(11);
-        doc.text('TOTAL: '+Format.money(v.total),pageW-15,y,{align:'right'});
-        if(v.notas){y+=8;doc.setFont('helvetica','normal');doc.setFontSize(9);doc.text('Nota: '+String(v.notas).substring(0,90),15,y);}
-        y+=12;doc.setFontSize(8);doc.setTextColor(130);
-        if(esResumen){
-            doc.text('Documento informativo del pedido. No reemplaza la factura electronica emitida',15,y);
-            y+=4;doc.text('ante la DIAN (Resolucion '+EMISOR_CONFIG.resolucionNumero+').',15,y);
-        }else{
-            doc.text('Documento de venta - Regimen '+EMISOR_CONFIG.regimenFiscal+'.',15,y);
+        var pageH=doc.internal.pageSize.getHeight();
+        var mx=12, my=12;
+        var anchoUtil=pageW-mx*2;
+
+        /* ---- columnas de la tabla (se calculan según el ancho disponible) ---- */
+        var colFijas={codigo:16,cant:11,valorUnit:20,pctDesc:13,precioDesc:21,pctIva:11,iva:19,total:21};
+        var sumaFijas=colFijas.codigo+colFijas.cant+colFijas.valorUnit+colFijas.pctDesc+colFijas.precioDesc+colFijas.pctIva+colFijas.iva+colFijas.total;
+        var colDesc=Math.max(35,anchoUtil-sumaFijas);
+        var xCodigo=mx, xDesc=xCodigo+colFijas.codigo, xCant=xDesc+colDesc, xValorUnit=xCant+colFijas.cant,
+            xPctDesc=xValorUnit+colFijas.valorUnit, xPrecioDesc=xPctDesc+colFijas.pctDesc, xPctIva=xPrecioDesc+colFijas.precioDesc,
+            xIva=xPctIva+colFijas.pctIva, xTotal=xIva+colFijas.iva;
+        var xRight=mx+anchoUtil;
+
+        function nuevaPagina(){doc.addPage('letter',orientacion);}
+        function saltoSiNecesario(alto,esFilaTabla){ if(y+alto>pageH-18){nuevaPagina();y=my; if(esFilaTabla)dibujarEncabezadoTabla();} }
+
+        var y=my;
+        /* ---- Encabezado: logo + datos de la empresa + numero de documento ---- */
+        if(logo.uri&&logo.formato){
+            try{doc.addImage(logo.uri,logo.formato,mx,y,20,20);}catch(e){}
         }
+        var xTextoEmpresa=logo.uri?mx+24:mx;
+        doc.setFont('helvetica','bold');doc.setFontSize(14);doc.setTextColor(190,60,20);
+        doc.text(logo.nombre,xTextoEmpresa,y+6);
+        doc.setTextColor(0);doc.setFont('helvetica','normal');doc.setFontSize(8.5);
+        doc.text('NIT: '+EMISOR_CONFIG.nit+'  ·  '+EMISOR_CONFIG.razonSocial,xTextoEmpresa,y+11);
+        doc.text('Dirección: '+EMISOR_CONFIG.direccion+' - '+EMISOR_CONFIG.municipio,xTextoEmpresa,y+15);
+        doc.text('Tel: '+EMISOR_CONFIG.telefono+'  ·  '+EMISOR_CONFIG.correo,xTextoEmpresa,y+19);
+        doc.setFont('helvetica','bold');doc.setFontSize(13);
+        doc.text(tituloDoc+' '+numero,xRight,y+6,{align:'right'});
+        doc.setFont('helvetica','normal');doc.setFontSize(9);
+        doc.text('Fecha de entrega: '+(v.fechaEnt||'-'),xRight,y+11,{align:'right'});
+        y+=24;
+
+        /* ---- Bloque cliente / vendedor (dos columnas, con recuadro) ----
+           Los valores (nombre de cliente, direccion, etc.) pueden ser largos,
+           así que cada campo se ajusta (wrap) al ancho de su columna en vez
+           de salirse encima de la columna de al lado. */
+        doc.setFontSize(8.5);
+        /* Se prefiere el vendedor GUARDADO en la venta (v.vendedorNombre, etc.)
+           sobre "el vendedor con la sesión abierta ahora mismo" - esto es lo
+           que permite reimprimir correctamente desde el computador del
+           administrador, donde no existe ningún vendedor "actualmente
+           conectado". En el celular, al momento de la venta, ambos coinciden. */
+        var vend=(v.vendedorNombre!=null)?{nombre:v.vendedorNombre,telefono:v.vendedorTelefono,zona:v.vendedorZona}:vendedorActualObj();
+        var anchoValorCampo=anchoUtil/2-32;
+        function medirCampos(filas){
+            var y0=0,alturas=[];
+            filas.forEach(function(f){
+                var lineas=doc.splitTextToSize(String(f[1]||'-'),anchoValorCampo);
+                var h=Math.max(5,lineas.length*3.6+1.4);
+                alturas.push({lineas:lineas,h:h});
+                y0+=h;
+            });
+            return {total:y0,filas:alturas};
+        }
+        var filasIzq=[['CLIENTE:',adq.nombre],['CC / NIT:',adq.documento],['CELULAR:',adq.telefono],['DIRECCIÓN:',adq.direccion],['CIUDAD:',adq.ciudad]];
+        var filasDer=[['FECHA PEDIDO:',v.fecha+' '+v.hora],['VENDEDOR:',vend?vend.nombre:'(sin asignar)'],['CEL. VENDEDOR:',vend?vend.telefono:'-'],['RUTA / ZONA:',vend?vend.zona:'-'],['CORREO:',EMISOR_CONFIG.correo]];
+        var medIzq=medirCampos(filasIzq), medDer=medirCampos(filasDer);
+        var alturaBloque=Math.max(26,medIzq.total,medDer.total)+4;
+        doc.setDrawColor(60);doc.setLineWidth(0.3);
+        doc.rect(mx,y,anchoUtil,alturaBloque);
+        doc.line(mx+anchoUtil/2,y,mx+anchoUtil/2,y+alturaBloque);
+        function pintarColumna(x,filas,medidas){
+            var yy=y+4.5;
+            filas.forEach(function(f,i){
+                doc.setFont('helvetica','bold');doc.text(f[0],x+2,yy);
+                doc.setFont('helvetica','normal');doc.text(medidas.filas[i].lineas,x+30,yy);
+                yy+=medidas.filas[i].h;
+            });
+        }
+        pintarColumna(mx,filasIzq,medIzq);
+        pintarColumna(mx+anchoUtil/2,filasDer,medDer);
+        y+=alturaBloque+6;
+
+        /* ---- Tabla de productos ---- */
+        function dibujarEncabezadoTabla(){
+            doc.setFont('helvetica','bold');doc.setFontSize(8);doc.setFillColor(235,235,235);
+            doc.rect(mx,y,anchoUtil,6,'F');
+            doc.text('Código',xCodigo+1,y+4);
+            doc.text('Descripción',xDesc+1,y+4);
+            doc.text('Cant.',xCant+colFijas.cant-1,y+4,{align:'right'});
+            doc.text('Vlr. Unit.',xValorUnit+colFijas.valorUnit-1,y+4,{align:'right'});
+            doc.text('%Desc',xPctDesc+colFijas.pctDesc-1,y+4,{align:'right'});
+            doc.text('Precio c/Desc',xPrecioDesc+colFijas.precioDesc-1,y+4,{align:'right'});
+            doc.text('%IVA',xPctIva+colFijas.pctIva-1,y+4,{align:'right'});
+            doc.text('IVA',xIva+colFijas.iva-1,y+4,{align:'right'});
+            doc.text('Total',xTotal+colFijas.total-1,y+4,{align:'right'});
+            y+=6;
+            doc.setFont('helvetica','normal');
+        }
+        dibujarEncabezadoTabla();
+
+        var totalCant=0, totalDescuentoPesos=0, subtotal=0, totalIva=0;
+        doc.setFontSize(8);
+        items.forEach(function(it){
+            var valorUnit=(it.precioLista!=null?it.precioLista:it.precio)||0;
+            var pctDesc=it.descuentoPct||0;
+            var precioDesc=it.precio||0; // precio unitario ya con el % de descuento aplicado
+            var pctIva=(it.iva!=null?it.iva:19);
+            var lineaSubtotal=precioDesc*it.cant;
+            var lineaIva=Math.round(lineaSubtotal*pctIva/100);
+            var lineaTotal=lineaSubtotal+lineaIva;
+            totalCant+=it.cant;
+            totalDescuentoPesos+=(valorUnit-precioDesc)*it.cant;
+            subtotal+=lineaSubtotal;
+            totalIva+=lineaIva;
+
+            var lineasDesc=doc.splitTextToSize(String(it.nombre||''),colDesc-2);
+            var altoFila=Math.max(5,lineasDesc.length*3.6+1.5);
+            saltoSiNecesario(altoFila,true);
+            doc.text(String(it.id||'').toString().slice(-8),xCodigo+1,y+3.6);
+            doc.text(lineasDesc,xDesc+1,y+3.6);
+            doc.text(String(it.cant),xCant+colFijas.cant-1,y+3.6,{align:'right'});
+            doc.text(Format.money(valorUnit),xValorUnit+colFijas.valorUnit-1,y+3.6,{align:'right'});
+            doc.text(pctDesc+'%',xPctDesc+colFijas.pctDesc-1,y+3.6,{align:'right'});
+            doc.text(Format.money(precioDesc),xPrecioDesc+colFijas.precioDesc-1,y+3.6,{align:'right'});
+            doc.text(pctIva+'%',xPctIva+colFijas.pctIva-1,y+3.6,{align:'right'});
+            doc.text(Format.money(lineaIva),xIva+colFijas.iva-1,y+3.6,{align:'right'});
+            doc.text(Format.money(lineaTotal),xTotal+colFijas.total-1,y+3.6,{align:'right'});
+            y+=altoFila;
+        });
+        doc.setDrawColor(150);doc.line(mx,y,xRight,y);
+        y+=2;
+
+        var totalFactura=subtotal+totalIva;
+
+        /* ---- Resumen de totales + método de pago + cuenta de pago ---- */
+        saltoSiNecesario(34);
+        var yResumen=y+5;
+        doc.setFont('helvetica','bold');doc.setFontSize(8.5);
+        doc.text('Método de pago: ',mx,yResumen);
+        doc.setFont('helvetica','normal');doc.text(String(v.pago||'-'),mx+32,yResumen);
+        doc.setFont('helvetica','bold');doc.text('Unidades: ',mx,yResumen+5);
+        doc.setFont('helvetica','normal');doc.text(String(totalCant),mx+32,yResumen+5);
+        doc.setFont('helvetica','bold');doc.text('Cuenta de pago: ',mx,yResumen+10);
+        doc.setFont('helvetica','normal');
+        var cuentaLineas=doc.splitTextToSize(EMISOR_CONFIG.cuentaBanco||'-',anchoUtil/2-32);
+        doc.text(cuentaLineas,mx+32,yResumen+10);
+
+        var xTot=xRight;
+        function totLinea(yy,etq,val,negrita){
+            doc.setFont('helvetica',negrita?'bold':'normal');
+            doc.text(etq,xTot-55,yy);
+            doc.text(Format.money(val),xTot,yy,{align:'right'});
+        }
+        totLinea(yResumen,'Total descuento:',totalDescuentoPesos,false);
+        totLinea(yResumen+5,'Subtotal:',subtotal,false);
+        totLinea(yResumen+10,'IVA:',totalIva,false);
+        doc.setFontSize(10);
+        totLinea(yResumen+16,'TOTAL:',totalFactura,true);
+        doc.setFontSize(8.5);
+        y=yResumen+22;
+
+        /* ---- Observaciones (libre, la llena el vendedor/administrador) ---- */
+        saltoSiNecesario(14);
+        doc.setFont('helvetica','bold');doc.text('Observaciones:',mx,y+5);
+        doc.setFont('helvetica','normal');
+        var obsLineas=doc.splitTextToSize(v.notas?String(v.notas):'-',anchoUtil-30);
+        doc.text(obsLineas,mx+30,y+5);
+        y+=5+obsLineas.length*4;
+
+        /* ---- Nota legal / aclaración DIAN ---- */
+        saltoSiNecesario(14);
+        doc.setFontSize(7);doc.setTextColor(110);
+        if(esResumen){
+            var n1='Este documento es una REMISIÓN informativa del pedido y no reemplaza la factura electrónica que se';
+            var n2='emite ante la DIAN (Resolución '+EMISOR_CONFIG.resolucionNumero+', rango '+EMISOR_CONFIG.resolucionRangoDesde+'-'+EMISOR_CONFIG.resolucionRangoHasta+').';
+            doc.text(n1,mx,y+5);doc.text(n2,mx,y+9);
+        }else{
+            var l1='Esta factura de venta se asimila en todos sus efectos legales a una letra de cambio según el artículo No. 671 y S.S 772-774';
+            var l2='del Código de Comercio. En caso de mora se causará el interés autorizado por la ley.';
+            doc.text(l1,mx,y+5);doc.text(l2,mx,y+9);
+        }
+        doc.setTextColor(0);
+
         return {doc:doc,numero:numero,titulo:tituloDoc};
     }catch(e){console.warn('[vendedor] fallo generando el PDF del pedido:',e);return null;}
 }
@@ -861,7 +1065,7 @@ var n=2+Math.floor(Math.random()*3);
 for(var j=0;j<n;j++){
 var c=clientes[Math.floor(Math.random()*clientes.length)];
 var it=[]; var ni=1+Math.floor(Math.random()*3); var tot=0;
-for(var k=0;k<ni;k++){var p=productos[Math.floor(Math.random()*productos.length)]; var q=1+Math.floor(Math.random()*4); it.push({id:p.id,nombre:p.nombre,precio:p.precio,cant:q}); tot+=p.precio*q;}
+for(var k=0;k<ni;k++){var p=productos[Math.floor(Math.random()*productos.length)]; var q=1+Math.floor(Math.random()*4); var ld=lineaDesdeProducto(p,q); it.push(ld); tot+=ld.precio*q;}
 ventas.push({id:'V'+Date.now()+i+j,fecha:fs,hora:(9+Math.floor(Math.random()*9))+':'+(10+Math.floor(Math.random()*40)),clienteId:c.id,cliente:c.nombre,items:it,total:tot,pago:'Efectivo',estado:'pagada'});
 }
 }
@@ -1143,13 +1347,13 @@ q=norm(q||'');var r=productos;
 if(q)r=productos.filter(function(p){return norm(p.nombre).indexOf(q)>=0||norm(p.codigo).indexOf(q)>=0;});
 var g=$('pgrid');
 if(!r.length){g.innerHTML='<div class="empty" style="grid-column:1/-1"><div class="e">📦</div><p>Sin productos</p></div>';return;}
-g.innerHTML=r.map(function(p){var out=p.stock<=0;return '<div class="pcard '+(out?'out':'')+'" data-act="addProd" data-id="'+p.id+'"><button class="add" data-act="addProd" data-id="'+p.id+'">+</button><div class="emo">'+(p.icono||'📦')+'</div><div class="nm">'+p.nombre+'</div><div class="pr">'+Format.money(p.precio)+'</div><div class="stk">'+(out?'Sin stock':'Stock '+p.stock)+'</div></div>';}).join('');
+g.innerHTML=r.map(function(p){var out=p.stock<=0;return '<div class="pcard '+(out?'out':'')+'" data-act="addProd" data-id="'+p.id+'"><button class="add" data-act="addProd" data-id="'+p.id+'">+</button><div class="emo">'+(p.icono||'📦')+'</div><div class="nm">'+p.nombre+'</div><div class="pr">'+Format.money(precioBaseProd(p))+'</div><div class="stk">'+(out?'Sin stock':'Stock '+p.stock)+'</div></div>';}).join('');
 }
 function buscarProductosAC(q,cont){
 q=norm(q);if(!q){cont.classList.remove('show');cont.innerHTML='';return;}
 var r=productos.filter(function(p){return norm(p.nombre).indexOf(q)>=0||norm(p.codigo).indexOf(q)>=0;}).slice(0,8);
 if(!r.length){cont.innerHTML='<div class="ac-empty">Sin productos</div>';cont.classList.add('show');return;}
-cont.innerHTML=r.map(function(p){return '<div class="ac-item" data-act="addProd" data-id="'+p.id+'"><span class="nm">'+p.icono+' '+p.nombre+'</span><span class="mt">'+Format.money(p.precio)+'</span></div>';}).join('');
+cont.innerHTML=r.map(function(p){return '<div class="ac-item" data-act="addProd" data-id="'+p.id+'"><span class="nm">'+p.icono+' '+p.nombre+'</span><span class="mt">'+Format.money(precioBaseProd(p))+'</span></div>';}).join('');
 cont.classList.add('show');
 }
 function addProd(id){
@@ -1157,7 +1361,7 @@ var p=productos.find(function(x){return x.id===id;});if(!p)return;
 if(p.stock<=0){Notif.warning('Sin stock de '+p.nombre);return;}
 var it=null;for(var i=0;i<carrito.length;i++)if(carrito[i].id===id){it=carrito[i];break;}
 if(it){if(it.cant>=p.stock){Notif.warning('Stock máximo');return;}it.cant++;}
-else carrito.push({id:p.id,nombre:p.nombre,precio:p.precio,cant:1});
+else carrito.push(lineaDesdeProducto(p,1));
 $('prodResults').classList.remove('show');$('prodSearch').value='';
 pintarCarrito();pintarMenu();Notif.success('+ '+p.nombre);
 }
@@ -1181,7 +1385,7 @@ function agregarCantidadProd(id,cantidad){
     var it=null;for(var i=0;i<carrito.length;i++)if(carrito[i].id===id){it=carrito[i];break;}
     var nuevaCant=(it?it.cant:0)+cantidad;
     if(nuevaCant>p.stock){nuevaCant=p.stock;Notif.warning('Stock máximo de '+p.nombre+': '+p.stock);}
-    if(it)it.cant=nuevaCant;else carrito.push({id:p.id,nombre:p.nombre,precio:p.precio,cant:nuevaCant});
+    if(it)it.cant=nuevaCant;else carrito.push(lineaDesdeProducto(p,nuevaCant));
     pintarCarrito();pintarMenu();
     return true;
 }
@@ -1252,8 +1456,11 @@ function pedirPorCamara(){
 function pintarCarrito(){
 var c=$('carrito');
 if(!carrito.length){c.innerHTML='<div class="empty"><div class="e">🛒</div><p>Aún no agregas productos</p></div>';$('totalbar').style.display='none';$('cardRes').style.opacity='.5';$('cardRes').style.pointerEvents='none';return;}
-c.innerHTML=carrito.map(function(it,i){return '<div class="citem"><div class="info"><b>'+it.nombre+'</b><br><small>'+Format.money(it.precio)+' c/u</small></div><div class="qty"><button data-act="qty" data-i="'+i+'" data-d="-1">−</button><span>'+it.cant+'</span><button data-act="qty" data-i="'+i+'" data-d="1">+</button></div></div>';}).join('');
-var tot=carrito.reduce(function(s,it){return s+it.precio*it.cant;},0);
+c.innerHTML=carrito.map(function(it,i){
+var precioTxt=(it.descuentoPct>0)?('<s style=\'opacity:.55\'>'+Format.money(it.precioLista)+'</s> '+Format.money(it.precio)+' c/u (-'+it.descuentoPct+'%)'):(Format.money(it.precio)+' c/u');
+return '<div class="citem"><div class="info"><b>'+it.nombre+'</b><br><small>'+precioTxt+'</small></div><div class="qty"><button data-act="qty" data-i="'+i+'" data-d="-1">−</button><span>'+it.cant+'</span><button data-act="qty" data-i="'+i+'" data-d="1">+</button></div></div>';
+}).join('');
+var tot=totalVentaConIva(carrito);
 $('totalVal').textContent=Format.money(tot);$('totalbar').style.display='flex';
 $('cardRes').style.opacity='1';$('cardRes').style.pointerEvents='auto';
 if(cliSel)$('step2').classList.add('done');
@@ -1263,13 +1470,24 @@ function qty(i,d){carrito[i].cant+=d;if(carrito[i].cant<=0)carrito.splice(i,1);p
 function confirmarPedido(modoWa){
 if(!cliSel){Notif.error('Primero busca y elige un cliente');go('pedido');return;}
 if(!carrito.length){Notif.error('Agrega al menos un producto');return;}
-var tot=carrito.reduce(function(s,it){return s+it.precio*it.cant;},0);
-var v={id:'V'+Date.now(),fecha:hoyISO(),hora:new Date().toLocaleTimeString('es-CO').slice(0,5),clienteId:cliSel.id,cliente:cliSel.nombre,items:carrito.slice(),total:tot,pago:$('formaPago').value,fechaEnt:$('fechaEnt').value,notas:$('notas').value,estado:'pendiente'};
+var tot=totalVentaConIva(carrito);
+var vendAct=vendedorActualObj();
+var v={id:'V'+Date.now(),fecha:hoyISO(),hora:new Date().toLocaleTimeString('es-CO').slice(0,5),clienteId:cliSel.id,cliente:cliSel.nombre,items:carrito.slice(),total:tot,pago:$('formaPago').value,fechaEnt:$('fechaEnt').value,notas:$('notas').value,estado:'pendiente',vendedorId:vendAct?vendAct.id:null,vendedorNombre:vendAct?vendAct.nombre:'(sin asignar)',vendedorTelefono:vendAct?vendAct.telefono:'',vendedorZona:vendAct?vendAct.zona:''};
 ventas.push(v);DB.set('ventasV',ventas);
 cliSel.compras=(cliSel.compras||0)+1;cliSel.total=(cliSel.total||0)+tot;cliSel.ultima=hoyISO();
 if(v.pago==='Crédito')cliSel.saldo=(cliSel.saldo||0)+tot;
 DB.set('clientes',clientes);
 var resFac=generarFacturaPDF(v,cliSel);
+/* El número de factura/remisión que se acaba de asignar (resFac.numero) hay
+   que guardarlo EN la venta: si no, cuando el administrador la reimprima
+   después desde el computador, generarFacturaPDF volvería a pedir "el
+   siguiente número" y la factura reimpresa saldría con un número distinto
+   al que ya se le dio al cliente en el momento de la venta. */
+if(resFac){
+    v.facturaNumero=resFac.numero;
+    v.facturaTitulo=resFac.titulo;
+    DB.set('ventasV',ventas);
+}
 var pdfBase64=null;
 if(resFac&&resFac.doc){try{pdfBase64=resFac.doc.output('datauristring').split(',')[1];}catch(e){console.warn('[vendedor] no se pudo convertir el PDF para el correo:',e);}}
 enviarAvisoAdmin('pedido',{vendedor:(vendedorActualObj()?vendedorActualObj().nombre:'(sin asignar)'),cliente:cliSel.nombre,pago:v.pago,total:tot,items:carrito.map(function(it){return{nombre:it.nombre,cant:it.cant,precio:it.precio};}),facturaPdfBase64:pdfBase64,facturaNombre:resFac?resFac.numero:null});
