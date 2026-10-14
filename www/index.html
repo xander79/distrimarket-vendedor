@@ -9,6 +9,7 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@500;600;700;800&family=Noto+Color+Emoji&display=swap" rel="stylesheet">
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js" onerror="window.__noChart=true"></script>
+<script src="https://cdn.jsdelivr.net/npm/jspdf@2.5.2/dist/jspdf.umd.min.js" onerror="window.__noJsPDF=true"></script>
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" onerror="window.__noLeafletCss=true">
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" onerror="window.__noLeaflet=true"></script>
 <!-- Antes "Exportar" a Excel nunca podía funcionar: el botón llamaba a una librería de Excel
@@ -556,10 +557,35 @@ if(c.compras===undefined){c.compras=0;cambio=true;}
 if(c.total===undefined){c.total=0;cambio=true;}
 if(c.saldo===undefined){c.saldo=0;cambio=true;}
 if(c.zona===undefined){c.zona='';cambio=true;}
+if(c.facturacion===undefined){c.facturacion='normal';cambio=true;}
 });
 if(cambio)DB.set('clientes',clientes);
 }
 normalizarClientes();
+
+/* ===== Datos del emisor para el PDF de pedido/factura =====
+   El vendedor usa su celular, que no comparte el localStorage con el navegador
+   donde el administrador configura facturacion.html - por eso estos datos van
+   fijos aquí. Si cambia la resolución de la DIAN, el rango autorizado, o
+   cualquier dato de la empresa, hay que actualizarlos en este bloque. */
+var EMISOR_CONFIG={
+    razonSocial:'MEDINA RODAS JHON ALEXANDER',
+    nombreComercial:'DISTRIMARKET ANTIOQUIA T.A.T.',
+    nit:'71.782.712',
+    tipoContribuyente:'Persona Natural',
+    regimenFiscal:'R-99-PN',
+    responsabilidadTributaria:'ZZ - No aplica',
+    actividadEconomica:'4645',
+    direccion:'VDA AURORA',
+    municipio:'El Carmen De Viboral, Antioquia',
+    telefono:'3167444587',
+    correo:'gerencia@distrimarketat.com',
+    resolucionNumero:'18764092154101',
+    resolucionRangoDesde:'1',
+    resolucionRangoHasta:'1000',
+    resolucionVigencia:'2027-04-22'
+};
+var CONSUMIDOR_FINAL={tipoDoc:'CC',documento:'222222222222',nombre:'Consumidor final'};
 var pctCom = DB.get('pctComV', 5);
 var carrito = [];
 var cliSel = null;
@@ -623,6 +649,98 @@ function reintentarAvisosPendientes(){
     if(!cola.length)return;
     DB.set('avisosPendientes',[]);
     cola.forEach(function(item){intentarEnvioAviso(item.evento,item.datos,true);});
+}
+
+/* ===== PDF del pedido (factura / resumen) =====
+   Según el "Tipo de Facturación" configurado para el cliente (desde clientes.html):
+   - normal: el PDF es el documento de venta en sí (no pasa por la DIAN).
+   - electronica / consumidor_final: el PDF es solo un RESUMEN del pedido para
+     que el vendedor lo mande de una vez por WhatsApp; la factura electrónica
+     real sigue emitiéndose aparte, en el portal de la DIAN, con el CUFE real -
+     esta app nunca genera un CUFE, porque no está conectada a la DIAN. */
+function siguienteNumeroLocal(prefijo){
+    var k='facturaCorrelativoLocal';
+    var n=DB.get(k,0)+1;
+    DB.set(k,n);
+    return prefijo+'-'+String(n).padStart(5,'0');
+}
+function datosAdquiriente(cli){
+    if(!cli||cli.facturacion==='consumidor_final'){
+        return {tipoDoc:CONSUMIDOR_FINAL.tipoDoc,documento:CONSUMIDOR_FINAL.documento,nombre:CONSUMIDOR_FINAL.nombre,
+            direccion:cli?(cli.dir||cli.direccion||''):'',telefono:cli?(cli.tel||cli.telefono||''):''};
+    }
+    return {tipoDoc:(cli.tipoDoc||'cc').toUpperCase(),documento:cli.doc||cli.documento||'',nombre:cli.nombre||'',
+        direccion:cli.dir||cli.direccion||'',telefono:cli.tel||cli.telefono||''};
+}
+function generarFacturaPDF(v,cli){
+    if(typeof window.jspdf==='undefined'){console.warn('[vendedor] jsPDF no cargó (sin internet la primera vez que se abrió la app)');return null;}
+    try{
+        var tipoFac=(cli&&cli.facturacion)||'normal';
+        var esResumen=(tipoFac==='electronica'||tipoFac==='consumidor_final');
+        var adq=datosAdquiriente(cli);
+        var numero=siguienteNumeroLocal(esResumen?'RES':'FV');
+        var jsPDF=window.jspdf.jsPDF;
+        var doc=new jsPDF({unit:'mm',format:'a4'});
+        var pageW=doc.internal.pageSize.getWidth();
+        var y=15;
+        doc.setFont('helvetica','bold');doc.setFontSize(13);
+        doc.text(EMISOR_CONFIG.nombreComercial,15,y);
+        doc.setFont('helvetica','normal');doc.setFontSize(9);
+        y+=5;doc.text('NIT: '+EMISOR_CONFIG.nit+' - '+EMISOR_CONFIG.razonSocial,15,y);
+        y+=4.5;doc.text(EMISOR_CONFIG.direccion+' - '+EMISOR_CONFIG.municipio,15,y);
+        y+=4.5;doc.text('Tel: '+EMISOR_CONFIG.telefono+' - '+EMISOR_CONFIG.correo,15,y);
+        var tituloDoc=esResumen?'RESUMEN DE PEDIDO':'FACTURA DE VENTA';
+        doc.setFont('helvetica','bold');doc.setFontSize(12);
+        doc.text(tituloDoc,pageW-15,15,{align:'right'});
+        doc.setFont('helvetica','normal');doc.setFontSize(9);
+        doc.text('N.: '+numero,pageW-15,20,{align:'right'});
+        doc.text('Fecha: '+v.fecha+' '+v.hora,pageW-15,24.5,{align:'right'});
+        y+=8;doc.setDrawColor(200);doc.line(15,y,pageW-15,y);
+        y+=6;doc.setFont('helvetica','bold');doc.setFontSize(10);doc.text('Cliente',15,y);
+        doc.setFont('helvetica','normal');doc.setFontSize(9);
+        y+=5;doc.text((adq.tipoDoc?adq.tipoDoc+' ':'')+adq.documento+' - '+adq.nombre,15,y);
+        if(adq.direccion){y+=4.5;doc.text('Direccion de entrega: '+adq.direccion,15,y);}
+        if(adq.telefono){y+=4.5;doc.text('Tel: '+adq.telefono,15,y);}
+        y+=4.5;doc.text('Forma de pago: '+v.pago,15,y);
+        y+=8;doc.setFont('helvetica','bold');doc.setFontSize(9);
+        doc.text('Producto',15,y);doc.text('Cant.',120,y);doc.text('Precio',145,y);doc.text('Subtotal',175,y);
+        y+=2;doc.line(15,y,pageW-15,y);
+        doc.setFont('helvetica','normal');
+        (v.items||[]).forEach(function(it){
+            y+=5;
+            if(y>270){doc.addPage();y=15;}
+            doc.text(String(it.nombre||'').substring(0,45),15,y);
+            doc.text(String(it.cant),120,y);
+            doc.text(Format.money(it.precio),145,y);
+            doc.text(Format.money(it.precio*it.cant),175,y);
+        });
+        y+=3;doc.line(15,y,pageW-15,y);
+        y+=7;doc.setFont('helvetica','bold');doc.setFontSize(11);
+        doc.text('TOTAL: '+Format.money(v.total),pageW-15,y,{align:'right'});
+        if(v.notas){y+=8;doc.setFont('helvetica','normal');doc.setFontSize(9);doc.text('Nota: '+String(v.notas).substring(0,90),15,y);}
+        y+=12;doc.setFontSize(8);doc.setTextColor(130);
+        if(esResumen){
+            doc.text('Documento informativo del pedido. No reemplaza la factura electronica emitida',15,y);
+            y+=4;doc.text('ante la DIAN (Resolucion '+EMISOR_CONFIG.resolucionNumero+').',15,y);
+        }else{
+            doc.text('Documento de venta - Regimen '+EMISOR_CONFIG.regimenFiscal+'.',15,y);
+        }
+        return {doc:doc,numero:numero,titulo:tituloDoc};
+    }catch(e){console.warn('[vendedor] fallo generando el PDF del pedido:',e);return null;}
+}
+function compartirPedidoWhatsApp(cli,msg,resFac){
+    var tel='57'+(cli.tel||cli.telefono||'').replace(/\D/g,'');
+    var abrirTextoWa=function(){window.open('https://wa.me/'+tel+'?text='+encodeURIComponent(msg),'_blank');};
+    if(!resFac||!resFac.doc||!navigator.share){abrirTextoWa();return;}
+    try{
+        var blob=resFac.doc.output('blob');
+        var archivo=new File([blob],(resFac.numero||'pedido')+'.pdf',{type:'application/pdf'});
+        if(navigator.canShare&&navigator.canShare({files:[archivo]})){
+            navigator.share({files:[archivo],title:resFac.titulo,text:msg}).catch(function(){abrirTextoWa();});
+        }else{
+            abrirTextoWa();
+        }
+    }catch(e){console.warn('[vendedor] no se pudo compartir el PDF por WhatsApp:',e);abrirTextoWa();}
 }
 
 /* ===== Ruta del día (inicio/fin) ===== */
@@ -1151,13 +1269,16 @@ ventas.push(v);DB.set('ventasV',ventas);
 cliSel.compras=(cliSel.compras||0)+1;cliSel.total=(cliSel.total||0)+tot;cliSel.ultima=hoyISO();
 if(v.pago==='Crédito')cliSel.saldo=(cliSel.saldo||0)+tot;
 DB.set('clientes',clientes);
-enviarAvisoAdmin('pedido',{vendedor:(vendedorActualObj()?vendedorActualObj().nombre:'(sin asignar)'),cliente:cliSel.nombre,pago:v.pago,total:tot,items:carrito.map(function(it){return{nombre:it.nombre,cant:it.cant,precio:it.precio};})});
+var resFac=generarFacturaPDF(v,cliSel);
+var pdfBase64=null;
+if(resFac&&resFac.doc){try{pdfBase64=resFac.doc.output('datauristring').split(',')[1];}catch(e){console.warn('[vendedor] no se pudo convertir el PDF para el correo:',e);}}
+enviarAvisoAdmin('pedido',{vendedor:(vendedorActualObj()?vendedorActualObj().nombre:'(sin asignar)'),cliente:cliSel.nombre,pago:v.pago,total:tot,items:carrito.map(function(it){return{nombre:it.nombre,cant:it.cant,precio:it.precio};}),facturaPdfBase64:pdfBase64,facturaNombre:resFac?resFac.numero:null});
 if(modoWa){
 var msg='🛒 *Pedido DISTRIMARKET*\nCliente: '+cliSel.nombre+'\n\n';
 carrito.forEach(function(it){msg+='• '+it.nombre+' x'+it.cant+' = '+Format.money(it.precio*it.cant)+'\n';});
 msg+='\n*Total: '+Format.money(tot)+'*\nPago: '+v.pago;
 if(v.notas)msg+='\nNota: '+v.notas;
-window.open('https://wa.me/57'+cliSel.tel.replace(/\D/g,'')+'?text='+encodeURIComponent(msg),'_blank');
+compartirPedidoWhatsApp(cliSel,msg,resFac);
 }
 Notif.success('✅ Pedido registrado · '+Format.money(tot));
 limpiarPedido();pintarTodo();
@@ -1257,6 +1378,7 @@ tel:tel,telefono:tel,
 dir:dir,direccion:dir,
 zona:zona,ciudad:'',diaVisita:$('nvDia').value,
 fav:false,compras:0,cantidadCompras:0,total:0,totalCompras:0,ultima:'',ultimaCompra:null,saldo:0,
+facturacion:'normal',
 estado:'activo',segmento:'nuevo',fuente:'vendedor',fechaRegistro:new Date().toISOString(),
 lat:cliGeoCapturadaV?cliGeoCapturadaV.lat:null,lng:cliGeoCapturadaV?cliGeoCapturadaV.lng:null};
 clientes.push(nc);
