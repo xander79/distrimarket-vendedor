@@ -968,17 +968,51 @@ function toggleRuta(){
         var ventasHoy=ventas.filter(function(v){return v.fecha===h;});
         var totalHoy=ventasHoy.reduce(function(s,v){return s+v.total;},0);
         var visitasHoy=visitas.filter(function(v){return v.fecha===h;});
-        enviarAvisoAdmin('fin_ruta',{vendedor:nombreVend,inicio:rutaActiva.inicio,fin:new Date().toISOString(),pedidos:ventasHoy.length,totalVentas:totalHoy,visitas:visitasHoy.length});
+        var finISO=new Date().toISOString();
+        enviarAvisoAdmin('fin_ruta',{vendedor:nombreVend,inicio:rutaActiva.inicio,fin:finISO,pedidos:ventasHoy.length,totalVentas:totalHoy,visitas:visitasHoy.length});
+        if(window.FBConfig&&typeof FBConfig.terminarRutaNube==='function'&&va)FBConfig.terminarRutaNube(va.id,finISO);
+        detenerSeguimientoGPS();
         rutaActiva=null;DB.set('rutaActivaV',null);
         Notif.success('Ruta terminada');
     }else{
         rutaActiva={inicio:new Date().toISOString()};
         DB.set('rutaActivaV',rutaActiva);
         enviarAvisoAdmin('inicio_ruta',{vendedor:nombreVend,inicio:rutaActiva.inicio});
+        if(window.FBConfig&&typeof FBConfig.iniciarRutaNube==='function'&&va)FBConfig.iniciarRutaNube(va.id,nombreVend,rutaActiva.inicio);
+        iniciarSeguimientoGPS();
         Notif.success('Ruta iniciada');
     }
     pintarRuta();
 }
+
+/* ===== Seguimiento GPS en vivo mientras la ruta está activa =====
+   Para que el administrador pueda ver en el mapa dónde está el vendedor
+   "en este momento" (no solo las visitas/pedidos ya registrados), el
+   celular manda su ubicación a la nube cada pocos minutos mientras la
+   ruta está en curso. Se hace con un intervalo simple (no watchPosition
+   continuo) para no gastar batería de más; si no hay señal GPS o nube en
+   ese momento, simplemente no se manda ese "ping" y se reintenta en el
+   siguiente - nunca interrumpe ni bloquea lo que el vendedor está haciendo. */
+var intervaloGPSRuta=null;
+function pingUbicacionRuta(){
+    if(!navigator.geolocation)return;
+    var va=vendedorActualObj();
+    if(!va||!window.FBConfig||typeof FBConfig.enviarUbicacionVendedor!=='function')return;
+    navigator.geolocation.getCurrentPosition(function(p){
+        FBConfig.enviarUbicacionVendedor(va.id,va.nombre,p.coords.latitude,p.coords.longitude);
+    },function(){/* sin señal GPS en este momento: se reintenta en el siguiente ping */},{enableHighAccuracy:true,maximumAge:60000,timeout:15000});
+}
+function iniciarSeguimientoGPS(){
+    if(intervaloGPSRuta)return;
+    pingUbicacionRuta();
+    intervaloGPSRuta=setInterval(pingUbicacionRuta,5*60*1000);
+}
+function detenerSeguimientoGPS(){
+    if(intervaloGPSRuta){clearInterval(intervaloGPSRuta);intervaloGPSRuta=null;}
+}
+/* Si la app se cerró y se volvió a abrir con una ruta ya activa, retoma el
+   envío de ubicación (si no, quedaría "en ruta" pero sin mandar nada). */
+if(rutaActiva&&rutaActiva.inicio)setTimeout(iniciarSeguimientoGPS,2000);
 function mostrarPickVendedorSiHaceFalta(){
 var vs=DB.get('vendedores',[]);
 var actual=DB.get('vendedorActualId',null);
@@ -1498,8 +1532,29 @@ msg+='\n*Total: '+Format.money(tot)+'*\nPago: '+v.pago;
 if(v.notas)msg+='\nNota: '+v.notas;
 compartirPedidoWhatsApp(cliSel,msg,resFac);
 }
+capturarGPSVentaAsync(v,cliSel);
 Notif.success('✅ Pedido registrado · '+Format.money(tot));
 limpiarPedido();pintarTodo();
+}
+/* ===== GPS del pedido (en segundo plano, no retrasa ni bloquea la venta) =====
+   Antes solo las "visitas" guardaban GPS y la distancia a la dirección
+   registrada del cliente (campo 'lejos'); un pedido normal quedaba sin esa
+   verificación. Esto se captura DESPUÉS de guardar la venta (fire & forget)
+   para que nunca demore la confirmación del pedido - si no hay señal GPS en
+   ese momento, el pedido queda igual de válido, simplemente sin esa marca. */
+function capturarGPSVentaAsync(v,cli){
+    if(!navigator.geolocation)return;
+    navigator.geolocation.getCurrentPosition(function(p){
+        var distM=null,lejos=false;
+        if(cli&&cli.lat!=null&&cli.lng!=null){
+            distM=Math.round(distanciaMetros(p.coords.latitude,p.coords.longitude,cli.lat,cli.lng));
+            lejos=distM>300;
+        }
+        v.gps=p.coords.latitude.toFixed(5)+','+p.coords.longitude.toFixed(5);
+        v.distanciaM=distM;v.lejos=lejos;
+        DB.set('ventasV',ventas);
+        if(lejos)Notif.warning('⚠️ Este pedido se registró a '+distM+'m de la dirección registrada del cliente');
+    },function(){/* sin señal GPS en este momento: el pedido queda sin esta verificación */},{enableHighAccuracy:true,maximumAge:60000,timeout:15000});
 }
 function limpiarPedido(){
 carrito=[];cliSel=null;
@@ -1784,7 +1839,18 @@ function sync(){
     if(!window.FBConfig){ Notif.warning('La conexión a la nube no está disponible en esta copia de la app'); return; }
     var cfg=FBConfig.getConfig();
     if(!cfg||!cfg.apiKey||!cfg.projectId){ Notif.warning('Todavía no hay conexión a la nube configurada. Pídele al administrador que la active en Configuración → Avanzado.'); return; }
-    if(!FBConfig.isSync()){ Notif.warning('La sincronización en la nube está desactivada desde Configuración.'); return; }
+    if(!FBConfig.isSync()){
+        /* Esto queda guardado en ESTE celular (localStorage), no en el servidor - así que
+           reinstalar la app NO lo arregla por sí solo. Antes esto era un callejón sin salida
+           (un aviso y nada más); ahora se puede activar aquí mismo con un toque. */
+        if(confirm('La sincronización con la nube está desactivada en este celular.\n\n¿Quieres activarla ahora y sincronizar?')){
+            FBConfig.setSync(true);
+            Notif.info('Activada. Sincronizando...');
+            return sync();
+        }
+        Notif.warning('La sincronización en la nube está desactivada en este celular.');
+        return;
+    }
     Notif.info('Sincronizando con la nube...');
     FBConfig.syncNow({pull:['productos','clientes','vendedores','empresaLogo','empresaNombre'],push:['clientes','ventasV','visitasV','metaV']},function(res){
         if(!res||!res.ok){
@@ -1798,6 +1864,13 @@ function sync(){
         var errores=(res.pull||[]).concat(res.push||[]).filter(function(r){return r.estado==='error';});
         if(errores.length) Notif.warning('Sincronizado con '+errores.length+' error(es) · '+bajaron+' actualizado(s), '+subieron+' subido(s).');
         else Notif.success('🔄 Sincronizado de verdad · '+bajaron+' actualizado(s) de la oficina, '+subieron+' subido(s) a la nube.');
+        /* Si el administrador ajustó el consecutivo de facturas desde Configuración,
+           este celular lo recoge aquí mismo (nunca retrocede el contador). */
+        if(typeof FBConfig.sincronizarConsecutivoFactura==='function'){
+            FBConfig.sincronizarConsecutivoFactura(function(cambio,nuevo){
+                if(cambio)Notif.info('🔢 Numeración de facturas actualizada: la próxima será la Nº '+(nuevo+1));
+            });
+        }
         pintarMenu();
     });
 }
@@ -1954,6 +2027,11 @@ function intentarSyncSilenciosa(){
             if(res&&res.ok){
                 var bajaron=(res.pull||[]).filter(function(r){return r.estado==='actualizado_desde_la_nube';}).length;
                 if(bajaron){try{recargarDatosLocales();aplicarPermisosUI();aplicarLogoEmpresa();mostrarPickVendedorSiHaceFalta();}catch(e){console.warn('[vendedor] sync silenciosa: repintar falló',e);}Notif.info('📦 Catálogo actualizado desde la oficina');}
+                if(typeof FBConfig.sincronizarConsecutivoFactura==='function'){
+                    FBConfig.sincronizarConsecutivoFactura(function(cambio,nuevo){
+                        if(cambio)Notif.info('🔢 Numeración de facturas actualizada: la próxima será la Nº '+(nuevo+1));
+                    });
+                }
             }
         });
     }catch(e){}
