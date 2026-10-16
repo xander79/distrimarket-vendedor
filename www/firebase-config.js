@@ -381,6 +381,97 @@ function pushKeys(keys) {
     }));
 }
 
+/* ============================================================
+   4-ter) NUMERACION DE FACTURAS - AJUSTE SEGURO DESDE LA NUBE
+   ------------------------------------------------------------
+   'facturaCorrelativoLocal' es el contador que usa cada celular para
+   numerar sus facturas/remisiones (ver siguienteNumeroLocal() en
+   vendedor.html). El administrador puede "adelantar" este contador
+   desde config.html (por ejemplo, al retomar la numeracion donde se
+   quedo en Toma Pedidos). Para que ese ajuste llegue a TODOS los
+   celulares, se sincroniza como cualquier otra clave - pero con una
+   diferencia importante: un contador NUNCA debe retroceder (eso
+   repetiria un numero de factura que ese celular ya uso), asi que
+   solo se aplica el valor de la nube si es MAYOR al que ya hay aqui.
+   ============================================================ */
+function sincronizarConsecutivoFactura(cb) {
+    if (!fbOnline || !fbDb) { if (cb) cb(false); return; }
+    cloudRead('facturaCorrelativoLocal').then(function (remoto) {
+        if (!remoto || typeof remoto.value !== 'number') { if (cb) cb(false); return; }
+        var local = 0;
+        try { local = window.DB.get('facturaCorrelativoLocal', 0); } catch (e) {}
+        if (remoto.value > local) {
+            _aplicandoRemoto = true;
+            try { window.DB.set('facturaCorrelativoLocal', remoto.value); } finally { _aplicandoRemoto = false; }
+            if (cb) cb(true, remoto.value);
+        } else {
+            if (cb) cb(false);
+        }
+    }).catch(function () { if (cb) cb(false); });
+}
+
+/* ============================================================
+   4-quater) CONTROL DE RUTA DEL VENDEDOR (en vivo + historial)
+   ------------------------------------------------------------
+   Coleccion aparte, 'rutas_vendedores', con un documento por vendedor
+   (id = vendedorId), para que dos vendedores en ruta al mismo tiempo
+   no se pisen el uno al otro (a diferencia del espejo generico por
+   clave, que comparte un solo documento por clave entre todos).
+   Campos: vendedorId, vendedorNombre, inicio, fin,
+   ultimaUbicacion:{lat,lng,hora}, recorridoHoy:[{lat,lng,hora},...].
+   ============================================================ */
+function refRutaVendedor(vendedorId) {
+    return fbDb.collection('rutas_vendedores').doc(safeDocId(String(vendedorId)));
+}
+function iniciarRutaNube(vendedorId, vendedorNombre, inicioISO, cb) {
+    if (!fbOnline || !fbDb || !vendedorId) { if (cb) cb(false); return; }
+    try {
+        refRutaVendedor(vendedorId).set({
+            vendedorId: vendedorId, vendedorNombre: vendedorNombre || '',
+            inicio: inicioISO, fin: null, recorridoHoy: [],
+            ultimaUbicacion: null,
+            actualizado: window.firebase.firestore.FieldValue.serverTimestamp()
+        }).then(function () { if (cb) cb(true); }).catch(function () { if (cb) cb(false); });
+    } catch (e) { if (cb) cb(false); }
+}
+function terminarRutaNube(vendedorId, finISO, cb) {
+    if (!fbOnline || !fbDb || !vendedorId) { if (cb) cb(false); return; }
+    try {
+        refRutaVendedor(vendedorId).set({
+            fin: finISO, actualizado: window.firebase.firestore.FieldValue.serverTimestamp()
+        }, { merge: true }).then(function () { if (cb) cb(true); }).catch(function () { if (cb) cb(false); });
+    } catch (e) { if (cb) cb(false); }
+}
+function enviarUbicacionVendedor(vendedorId, vendedorNombre, lat, lng, cb) {
+    if (!fbOnline || !fbDb || !vendedorId) { if (cb) cb(false); return; }
+    try {
+        var punto = { lat: lat, lng: lng, hora: new Date().toISOString() };
+        refRutaVendedor(vendedorId).set({
+            vendedorId: vendedorId, vendedorNombre: vendedorNombre || '',
+            ultimaUbicacion: punto,
+            recorridoHoy: window.firebase.firestore.FieldValue.arrayUnion(punto),
+            actualizado: window.firebase.firestore.FieldValue.serverTimestamp()
+        }, { merge: true }).then(function () { if (cb) cb(true); }).catch(function () { if (cb) cb(false); });
+    } catch (e) { if (cb) cb(false); }
+}
+function leerRutaVendedor(vendedorId, cb) {
+    if (!fbOnline || !fbDb || !vendedorId) { if (cb) cb(null); return; }
+    try {
+        refRutaVendedor(vendedorId).get().then(function (doc) {
+            cb(doc.exists ? doc.data() : null);
+        }).catch(function () { cb(null); });
+    } catch (e) { cb(null); }
+}
+function leerTodasLasRutasHoy(cb) {
+    if (!fbOnline || !fbDb) { if (cb) cb([]); return; }
+    try {
+        fbDb.collection('rutas_vendedores').get().then(function (snap) {
+            var arr = []; snap.forEach(function (d) { arr.push(d.data()); });
+            cb(arr);
+        }).catch(function () { cb([]); });
+    } catch (e) { cb([]); }
+}
+
 // "envuelve" DB.set para hacer write-through sin romper la API existente
 (function wrapDB() {
     var origSet = window.DB.set;
@@ -452,6 +543,12 @@ window.FBConfig = {
     },
     isOnline: function () { return fbOnline; },
     isSync: function () { return fbSync; },
+    sincronizarConsecutivoFactura: sincronizarConsecutivoFactura,
+    iniciarRutaNube: iniciarRutaNube,
+    terminarRutaNube: terminarRutaNube,
+    enviarUbicacionVendedor: enviarUbicacionVendedor,
+    leerRutaVendedor: leerRutaVendedor,
+    leerTodasLasRutasHoy: leerTodasLasRutasHoy,
     getConfig: function () { return mergeCfg(); },
     currentUser: currentUser,
     guardarTokenPush: guardarTokenPush,
