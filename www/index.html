@@ -1070,6 +1070,10 @@ vendedores=DB.get('vendedores',[]);
 $('pickVendedorOverlay').style.display='none';
 aplicarPermisosUI();
 pintarTodo();
+// Avisa al administrador por correo quién quedó identificado en este celular,
+// para que sepa a qué vendedora/vendedor le corresponde esta instalación de la app.
+var _vSel=vendedores.find(function(v){return v.id===id;});
+enviarAvisoAdmin('identificacion_vendedor',{vendedor:_vSel?_vSel.nombre:id,fecha:new Date().toISOString()});
 }
 function cambiarVendedor(){
 DB.set('vendedorActualId',null);
@@ -2039,7 +2043,7 @@ var pickOv=$('pickVendedorOverlay');
 if(pickOv)pickOv.addEventListener('click',function(e){
 var b=e.target.closest('[data-pick-vendedor]');if(!b)return;
 var id=b.getAttribute('data-pick-vendedor');
-if(id==='__skip')DB.set('vendedorActualId','__none__');
+if(id==='__skip'){DB.set('vendedorActualId','__none__');enviarAvisoAdmin('identificacion_vendedor',{vendedor:'(sin asignar - se omitió la identificación)',fecha:new Date().toISOString()});}
 else elegirVendedor(id);
 pickOv.style.display='none';
 aplicarPermisosUI();
