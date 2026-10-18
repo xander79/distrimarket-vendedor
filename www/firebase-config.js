@@ -411,6 +411,56 @@ function sincronizarConsecutivoFactura(cb) {
 }
 
 /* ============================================================
+   4-quater-bis) NUMERACION DE FACTURAS - BLOQUES ATOMICOS
+   ------------------------------------------------------------
+   sincronizarConsecutivoFactura (arriba) evita que el contador
+   RETROCEDA, pero no evita que DOS celulares reserven el MISMO
+   numero si generan una factura en el mismo instante sin haber
+   sincronizado entre si todavia (cada uno suma 1 a su propia copia
+   local, a ciegas).
+
+   Solucion real: en vez de "adivinar" el numero sumando 1 local,
+   cada celular le PIDE a Firestore un BLOQUE de numeros exclusivos
+   (ej: del 1900 al 1949) usando una transaccion atomica. Firestore
+   garantiza que si dos celulares piden un bloque al mismo tiempo,
+   cada uno recibe un rango distinto -nunca se solapan-. Mientras
+   tenga numeros libres en su bloque, el celular los reparte el
+   mismo localmente y sin internet (instantaneo, como antes). Solo
+   necesita conexion para pedir el SIGUIENTE bloque, no para cada
+   venta -por eso vendedor.html pide un bloque nuevo por adelantado
+   (en segundo plano, apenas hay señal) antes de que el que tiene se
+   le acabe.
+   ============================================================ */
+var BLOQUE_FACTURAS_TAMANO = 50;
+function reservarBloqueFactura(cb) {
+    if (!fbOnline || !fbDb) { if (cb) cb(null); return; }
+    try {
+        var ref = fbDb.collection('contadores_distrimarket').doc('facturas');
+        fbDb.runTransaction(function (tx) {
+            return tx.get(ref).then(function (doc) {
+                var actual = (doc.exists && typeof doc.data().siguienteDisponible === 'number') ? doc.data().siguienteDisponible : 1;
+                var nuevo = actual + BLOQUE_FACTURAS_TAMANO;
+                tx.set(ref, { siguienteDisponible: nuevo, actualizado: window.firebase.firestore.FieldValue.serverTimestamp() }, { merge: true });
+                return { desde: actual, hasta: nuevo - 1 };
+            });
+        }).then(function (bloque) { if (cb) cb(bloque); })
+          .catch(function (e) { console.warn('[firebase-config] no se pudo reservar bloque de facturas:', e); if (cb) cb(null); });
+    } catch (e) { if (cb) cb(null); }
+}
+// Lo usa config.html al "Aplicar ajuste": fija el punto de partida EXACTO del
+// contador atomico (ej: 1897), para que el primer bloque que pida cualquier
+// celular arranque justo despues de ese numero.
+function fijarContadorGlobalFactura(valor, cb) {
+    if (!fbOnline || !fbDb) { if (cb) cb(false); return; }
+    try {
+        fbDb.collection('contadores_distrimarket').doc('facturas').set({
+            siguienteDisponible: valor + 1,
+            actualizado: window.firebase.firestore.FieldValue.serverTimestamp()
+        }, { merge: true }).then(function () { if (cb) cb(true); }).catch(function () { if (cb) cb(false); });
+    } catch (e) { if (cb) cb(false); }
+}
+
+/* ============================================================
    4-quater) CONTROL DE RUTA DEL VENDEDOR (en vivo + historial)
    ------------------------------------------------------------
    Coleccion aparte, 'rutas_vendedores', con un documento por vendedor
@@ -544,6 +594,8 @@ window.FBConfig = {
     isOnline: function () { return fbOnline; },
     isSync: function () { return fbSync; },
     sincronizarConsecutivoFactura: sincronizarConsecutivoFactura,
+    reservarBloqueFactura: reservarBloqueFactura,
+    fijarContadorGlobalFactura: fijarContadorGlobalFactura,
     iniciarRutaNube: iniciarRutaNube,
     terminarRutaNube: terminarRutaNube,
     enviarUbicacionVendedor: enviarUbicacionVendedor,
