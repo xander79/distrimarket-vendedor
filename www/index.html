@@ -693,10 +693,50 @@ function reintentarAvisosPendientes(){
      que el vendedor lo mande de una vez por WhatsApp; la factura electrónica
      real sigue emitiéndose aparte, en el portal de la DIAN, con el CUFE real -
      esta app nunca genera un CUFE, porque no está conectada a la DIAN. */
+/* ===== Bloques atomicos de numeración (a prueba de choques entre varios
+   vendedores facturando al mismo tiempo) =====
+   En vez de que cada celular sume 1 a su copia local a ciegas (lo que podía
+   repetir un número si dos vendedores facturaban en el mismo instante), este
+   celular reserva por adelantado un BLOQUE de números exclusivos con
+   FBConfig.reservarBloqueFactura (transacción atómica en Firestore: dos
+   celulares pidiendo bloque al mismo tiempo SIEMPRE reciben rangos distintos).
+   Mientras tenga números libres en su bloque los reparte localmente, sin
+   internet, igual de rápido que antes. */
+var _pidiendoBloqueFactura=false;
+function asegurarBloqueFactura(){
+    if(_pidiendoBloqueFactura) return;
+    if(!window.FBConfig||typeof FBConfig.reservarBloqueFactura!=='function') return;
+    var bloque=DB.get('facturaBloque',null);
+    var usado=DB.get('facturaCorrelativoLocal',0);
+    var quedan=bloque?(bloque.hasta-usado):0;
+    if(bloque&&quedan>10) return; // todavía hay de sobra, no hace falta pedir otro
+    _pidiendoBloqueFactura=true;
+    FBConfig.reservarBloqueFactura(function(nuevo){
+        _pidiendoBloqueFactura=false;
+        if(nuevo&&typeof nuevo.desde==='number'&&typeof nuevo.hasta==='number'){
+            DB.set('facturaBloque',nuevo);
+            // adelanta el contador local hasta justo antes del inicio del bloque (nunca lo
+            // retrocede) para que el próximo +1 caiga exactamente en nuevo.desde
+            var actual=DB.get('facturaCorrelativoLocal',0);
+            if(actual<nuevo.desde-1) DB.set('facturaCorrelativoLocal',nuevo.desde-1);
+        }
+    });
+}
 function siguienteNumeroLocal(){
     var k='facturaCorrelativoLocal';
     var n=DB.get(k,0)+1;
+    var bloque=DB.get('facturaBloque',null);
+    if(bloque&&n<=bloque.hasta){
+        // dentro del rango que este celular tiene reservado en exclusiva: nadie más puede usar este número
+        DB.set(k,n);
+        if((bloque.hasta-n)<=10) asegurarBloqueFactura(); // se adelanta a pedir el siguiente, en segundo plano
+        return String(n).padStart(5,'0');
+    }
+    // Sin bloque vigente (celular recién instalado y todavía sin señal, por ejemplo): nunca se
+    // bloquea una venta por esto, se sigue numerando localmente como antes. Se intenta conseguir
+    // un bloque de una vez para que la próxima factura ya quede protegida.
     DB.set(k,n);
+    asegurarBloqueFactura();
     return String(n).padStart(5,'0');
 }
 function datosAdquiriente(cli){
@@ -1871,6 +1911,7 @@ function sync(){
                 if(cambio)Notif.info('🔢 Numeración de facturas actualizada: la próxima será la Nº '+(nuevo+1));
             });
         }
+        asegurarBloqueFactura();
         pintarMenu();
     });
 }
@@ -2032,6 +2073,7 @@ function intentarSyncSilenciosa(){
                         if(cambio)Notif.info('🔢 Numeración de facturas actualizada: la próxima será la Nº '+(nuevo+1));
                     });
                 }
+                asegurarBloqueFactura();
             }
         });
     }catch(e){}
