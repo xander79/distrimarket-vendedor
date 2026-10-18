@@ -592,7 +592,15 @@ window.FBConfig = {
         try { localStorage.setItem('fbSync', on ? 'true' : 'false'); window.FB_SYNC = !!on; logOk('sincronizacion en nube: ' + (on ? 'ACTIVA' : 'DESACTIVADA') + '. Recarga para aplicar.'); try { Notif.success('Sincronizacion ' + (on ? 'activada' : 'desactivada') + '. Recarga la pagina.'); } catch (e) {} return true; } catch (e) { return false; }
     },
     isOnline: function () { return fbOnline; },
-    isSync: function () { return fbSync; },
+    // Antes devolvía la variable fbSync directamente, pero esa variable solo se actualiza
+    // DESPUÉS de que termine de conectar a Firebase (eso es asíncrono - carga el SDK desde
+    // internet, autentica, etc., y en el celular con mala señal puede tardar varios segundos).
+    // Si el botón "Sincronizar" se toca justo al abrir la app, antes de que eso termine,
+    // isSync() todavía devolvía su valor inicial (false) aunque la sincronización SÍ estuviera
+    // activada - el mismo error de "carrera" que ya se corrigió en el sistema de oficina.
+    // syncActivaPorDefecto() no depende de la conexión: solo lee lo guardado en este celular,
+    // así que da la respuesta correcta de inmediato, se haya conectado Firebase o no todavía.
+    isSync: function () { return syncActivaPorDefecto(); },
     sincronizarConsecutivoFactura: sincronizarConsecutivoFactura,
     reservarBloqueFactura: reservarBloqueFactura,
     fijarContadorGlobalFactura: fijarContadorGlobalFactura,
