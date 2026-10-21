@@ -1555,6 +1555,21 @@ ventas.push(v);DB.set('ventasV',ventas);
 cliSel.compras=(cliSel.compras||0)+1;cliSel.total=(cliSel.total||0)+tot;cliSel.ultima=hoyISO();
 if(v.pago==='Crédito')cliSel.saldo=(cliSel.saldo||0)+tot;
 DB.set('clientes',clientes);
+/* Descuenta el stock vendido del inventario real (igual que ventas.html y
+   posmovil.html). Antes el carrito solo IMPEDÍA agregar más de lo disponible
+   (p.stock) pero nunca restaba nada al confirmar el pedido, así que el stock
+   quedaba desincronizado de lo que el vendedor realmente vendió en la calle. */
+var stockInsuficiente=[];
+carrito.forEach(function(it){
+    var p=productos.find(function(x){return x.id===it.id;});
+    if(!p) return;
+    var stockAntes=Number(p.stock)||0;
+    var stockNuevo=stockAntes-it.cant;
+    if(stockNuevo<0){ stockInsuficiente.push(p.nombre); stockNuevo=0; }
+    p.stock=stockNuevo;
+});
+DB.set('productos',productos);
+if(stockInsuficiente.length){ try{Notif.warning('⚠️ Stock quedó en 0 (se vendió más de lo disponible): '+stockInsuficiente.join(', '));}catch(e){} }
 var resFac=generarFacturaPDF(v,cliSel);
 /* El número de factura/remisión que se acaba de asignar (resFac.numero) hay
    que guardarlo EN la venta: si no, cuando el administrador la reimprima

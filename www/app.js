@@ -107,6 +107,112 @@ navegador lo carga dos veces).
         return (u && u.rol) ? String(u.rol).trim().toLowerCase() : null;
     }
 
+    /* ---------------------------------------------------------------------
+       AUDITORIA: registro real de actividad.
+       Antes, varias pantallas (Facturacion, Configuracion) llamaban a
+       Auditoria.log(...) para anotar cada accion importante, pero ese
+       modulo nunca se habia creado en ningun archivo compartido - la
+       llamada quedaba protegida por "if (window.Auditoria)" y, como
+       Auditoria no existia, simplemente no hacia nada. Resultado: "Ver
+       Logs" y "Exportar Logs" en Configuracion -> Avanzado siempre
+       mostraban vacio, sin importar cuantas acciones se hicieran.
+       Esta version SI escribe en DB('auditoria'), y respeta lo que el
+       usuario configuro en Avanzado: si "Registrar logs de actividad"
+       esta apagado, no se guarda nada; el "Nivel de Log" filtra que tan
+       detallado se registra; y "Retencion de Logs (dias)" borra solo lo
+       mas viejo que ese limite cada vez que se agrega un registro nuevo.
+    --------------------------------------------------------------------- */
+    var AUDITORIA_KEY = 'auditoria';
+    var NIVELES_LOG = { error: 0, warning: 1, info: 2, debug: 3 };
+    var AUDITORIA_MAX_REGISTROS = 5000; // tope duro de seguridad, aunque no haya retencion configurada
+
+    function configAvanzadoActual() {
+        try { return DB.get('configAvanzado', {}) || {}; } catch (e) { return {}; }
+    }
+    function purgarPorRetencion(lista, diasRetencion) {
+        if (!diasRetencion || diasRetencion <= 0) return lista;
+        var limite = Date.now() - diasRetencion * 24 * 60 * 60 * 1000;
+        return lista.filter(function (l) {
+            var t = new Date(l.fecha).getTime();
+            return isNaN(t) || t >= limite;
+        });
+    }
+    function registrarAuditoria(accion, modulo, detalle, nivel) {
+        try {
+            var cfg = configAvanzadoActual();
+            if (cfg.segLogs === false) return; // el usuario apago el registro de actividad
+            nivel = (nivel && NIVELES_LOG.hasOwnProperty(nivel)) ? nivel : 'info';
+            var nivelConfigurado = (cfg.logNivel && NIVELES_LOG.hasOwnProperty(cfg.logNivel)) ? NIVELES_LOG[cfg.logNivel] : NIVELES_LOG.info;
+            if (NIVELES_LOG[nivel] > nivelConfigurado) return; // mas detallado de lo que el usuario pidio ver
+            var u = usuarioActual();
+            var entrada = {
+                accion: accion,
+                modulo: modulo || '-',
+                detalle: (detalle === undefined ? null : detalle),
+                nivel: nivel,
+                usuario: (u && (u.nombre || u.usuario || u.email)) || 'Sistema',
+                fecha: new Date().toISOString()
+            };
+            var lista = DB.get(AUDITORIA_KEY, []) || [];
+            lista.push(entrada);
+            lista = purgarPorRetencion(lista, cfg.logRetencion);
+            if (lista.length > AUDITORIA_MAX_REGISTROS) lista = lista.slice(lista.length - AUDITORIA_MAX_REGISTROS);
+            DB.set(AUDITORIA_KEY, lista);
+        } catch (e) {}
+    }
+    window.Auditoria = { log: registrarAuditoria };
+
+    /* ---------------------------------------------------------------------
+       CIERRE DE SESION AUTOMATICA POR INACTIVIDAD (Avanzado -> Seguridad).
+       Si "Cerrar sesion automatica (30 min)" esta activo y la persona no
+       toca el mouse/teclado/pantalla en 30 minutos, se cierra la sesion
+       sola y se manda a login.html - igual que haria cualquier sistema
+       que maneja informacion sensible (ventas, cartera, clientes).
+    --------------------------------------------------------------------- */
+    var INACTIVIDAD_MS = 30 * 60 * 1000; // 30 minutos, tal como dice la pantalla de Configuracion
+    var inactividadTimer = null;
+    function segSesionActivo() {
+        var cfg = configAvanzadoActual();
+        return cfg.segSesion !== false; // activo por defecto (la casilla viene marcada de fabrica)
+    }
+    function cerrarSesionPorInactividad() {
+        try { registrarAuditoria('SESION_CERRADA_AUTOMATICAMENTE', 'SISTEMA', { motivo: 'inactividad de 30 min' }, 'warning'); } catch (e) {}
+        try { localStorage.removeItem('dm_user'); localStorage.removeItem('user'); } catch (e) {}
+        try { if (window.Notif && Notif.warning) Notif.warning('Sesión cerrada por inactividad.'); } catch (e) {}
+        window.location.href = 'login.html';
+    }
+    function reiniciarTimerInactividad() {
+        if (!segSesionActivo()) return;
+        if (!usuarioActual()) return; // sin sesion, no aplica (por ejemplo, en login.html)
+        if (inactividadTimer) clearTimeout(inactividadTimer);
+        inactividadTimer = setTimeout(cerrarSesionPorInactividad, INACTIVIDAD_MS);
+    }
+    try {
+        ['mousemove', 'keydown', 'click', 'scroll', 'touchstart'].forEach(function (ev) {
+            document.addEventListener(ev, reiniciarTimerInactividad, { passive: true });
+        });
+        reiniciarTimerInactividad();
+    } catch (e) {}
+
+    /* ---------------------------------------------------------------------
+       FORZAR SSL/HTTPS (Avanzado -> Seguridad). Si la pagina se abrio por
+       http:// en un dominio real (no en pruebas locales), la manda a la
+       version https://. En Hostinger el candado ya deberia venir activo
+       de todas formas; esto es un respaldo por si alguien entra con un
+       enlace viejo en http://.
+    --------------------------------------------------------------------- */
+    (function aplicarForzarSSL() {
+        try {
+            var cfg = configAvanzadoActual();
+            if (cfg.segSSL === false) return; // activo por defecto
+            if (location.protocol !== 'http:') return;
+            var host = location.hostname || '';
+            var esLocal = !host || host === 'localhost' || host === '127.0.0.1' || /^192\.168\./.test(host) || /^10\./.test(host);
+            if (esLocal) return;
+            location.href = 'https:' + location.href.substring(location.protocol.length);
+        } catch (e) {}
+    })();
+
     function verificarAcceso(modulo) {
         var rol = rolActual();
         // Sin sesion reconocible (por ejemplo, abriendo el archivo directo sin haber hecho

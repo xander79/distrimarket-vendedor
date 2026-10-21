@@ -81,6 +81,19 @@ body.login-body{font-family:'Segoe UI',Tahoma,Geneva,Verdana,sans-serif;backgrou
         <button type="submit" class="login-btn" id="loginBtn">Entrar</button>
     </form>
 
+    <!-- Paso de verificación en dos pasos (2FA): solo aparece si está activado en
+         Configuración → Avanzado → Seguridad, y solo después de validar usuario/contraseña. -->
+    <form id="form2FA" style="display:none;" autocomplete="off" onsubmit="return false;">
+        <div class="login-field">
+            <label for="codigo2FA">Código de verificación</label>
+            <input type="text" id="codigo2FA" name="codigo2FA" placeholder="000000" maxlength="6" inputmode="numeric" autocomplete="one-time-code">
+        </div>
+        <p id="msg2FA" style="font-size:12px;color:var(--color-text-light,#a7adc4);margin:0 0 12px;">Te enviamos un código a tu correo. Puede tardar un minuto en llegar.</p>
+        <button type="submit" class="login-btn" id="btnVerificar2FA">Verificar y entrar</button>
+        <a href="#" id="reenviar2FA" style="display:block;text-align:center;font-size:12px;margin-top:10px;color:var(--color-text-light,#a7adc4);">Reenviar código</a>
+        <a href="#" id="cancelar2FA" style="display:block;text-align:center;font-size:12px;margin-top:6px;color:var(--color-danger,#f0576a);">‹ Cancelar y volver</a>
+    </form>
+
     <div class="login-hint" id="loginHint">Acceso por defecto: <code>admin</code> / <code>admin123</code></div>
 
     <a class="login-logo-link" id="loginLogoLink" title="Subir o cambiar el logo de la empresa">🖼️ Configurar logo de la empresa</a>
@@ -100,6 +113,7 @@ body.login-body{font-family:'Segoe UI',Tahoma,Geneva,Verdana,sans-serif;backgrou
 
 <div class="login-foot">© <span id="loginYear"></span> DISTRIMARKET · Todos los derechos reservados</div>
 
+<script src="firebase-config.js" onerror="console.warn('[login] firebase-config.js no encontrado (ok, queda en modo local)')"></script>
 <script src="logo-empresa.js?v=20260720" onerror="console.warn('[login] logo-empresa.js no encontrado (ok)')"></script>
 
 <script>
@@ -122,12 +136,125 @@ body.login-body{font-family:'Segoe UI',Tahoma,Geneva,Verdana,sans-serif;backgrou
     function showError(m){ var e=document.getElementById('loginError'); e.textContent=m; e.style.display='block'; }
     function hideError(){ var e=document.getElementById('loginError'); e.textContent=''; e.style.display='none'; }
 
+    /* ---------------------------------------------------------------------
+       BLOQUEO POR INTENTOS FALLIDOS (Configuración → Avanzado → Seguridad).
+       "Intentos máximos de login" y "Tiempo de bloqueo (min)" antes solo se
+       guardaban en configAvanzado; el login real nunca los leía, así que
+       alguien podía probar contraseñas sin límite. Ahora sí se cuentan los
+       fallos por usuario (en este navegador) y, al llegar al máximo, se
+       bloquea ese usuario por el tiempo configurado.
+    --------------------------------------------------------------------- */
+    var INTENTOS_KEY = 'dm_loginAttempts';
+    function configAvanzadoLogin(){ try{ var v=JSON.parse(raw('configAvanzado')||'{}'); return (v&&typeof v==='object')?v:{}; }catch(e){ return {}; } }
+    function getIntentos(){ try{ var v=JSON.parse(raw(INTENTOS_KEY)||'{}'); return (v&&typeof v==='object')?v:{}; }catch(e){ return {}; } }
+    function setIntentos(o){ try{ localStorage.setItem(INTENTOS_KEY, JSON.stringify(o)); }catch(e){} }
+    // minutos que faltan para que el usuario quede desbloqueado (0 si no está bloqueado)
+    function minutosBloqueoRestante(userKey){
+        var reg=getIntentos()[userKey];
+        if(!reg||!reg.bloqueadoHasta) return 0;
+        var restanteMs=new Date(reg.bloqueadoHasta).getTime()-Date.now();
+        return restanteMs>0 ? Math.ceil(restanteMs/60000) : 0;
+    }
+    function registrarFallo(userKey){
+        var cfg=configAvanzadoLogin();
+        var maxIntentos=cfg.segIntentos||5, minBloqueo=cfg.segBloqueo||15;
+        var intentos=getIntentos();
+        var reg=intentos[userKey]||{fallos:0,bloqueadoHasta:null};
+        reg.fallos=(reg.fallos||0)+1;
+        if(reg.fallos>=maxIntentos){ reg.bloqueadoHasta=new Date(Date.now()+minBloqueo*60000).toISOString(); reg.fallos=0; }
+        intentos[userKey]=reg; setIntentos(intentos);
+        return reg;
+    }
+    function registrarExitoIntentos(userKey){ var intentos=getIntentos(); delete intentos[userKey]; setIntentos(intentos); }
+
+    /* ---------------------------------------------------------------------
+       2FA POR CORREO (Configuración → Avanzado → Seguridad → "Autenticación
+       de dos factores"). Si está activo, tras validar usuario/contraseña se
+       manda un código de 6 dígitos al correo de esa persona (reutilizando
+       el mismo archivo enviar_notificacion.php que ya usa Configuración →
+       Notificaciones) y hay que escribirlo para terminar de entrar.
+       OJO: esto depende de que el correo esté funcionando de verdad
+       (Zoho conectado en enviar_notificacion.php); si el correo falla, se
+       avisa con el error y se puede cancelar para volver a intentar luego.
+    --------------------------------------------------------------------- */
+    var NOTIF_ENDPOINT='https://distrimarketat.com/enviar_notificacion.php';
+    var NOTIF_TOKEN='21d07315d463ffd4d44ecdcfddb00c998d68a8bd2d96aeb1';
+    var PENDIENTE_2FA_KEY='dm_pendiente2fa'; // sessionStorage: sobrevive la espera del código, no sobrevive cerrar el navegador
+    function generarCodigo6(){ return String(Math.floor(100000+Math.random()*900000)); }
+    function guardarPendiente2FA(sesion,codigo){
+        try{ sessionStorage.setItem(PENDIENTE_2FA_KEY, JSON.stringify({ sesion:sesion, codigo:codigo, expira:Date.now()+5*60000 })); }catch(e){}
+    }
+    function leerPendiente2FA(){ try{ var v=JSON.parse(sessionStorage.getItem(PENDIENTE_2FA_KEY)||'null'); return v; }catch(e){ return null; } }
+    function borrarPendiente2FA(){ try{ sessionStorage.removeItem(PENDIENTE_2FA_KEY); }catch(e){} }
+
+    function mostrarPaso2FA(){
+        document.getElementById('loginForm').style.display='none';
+        document.getElementById('loginHint').style.display='none';
+        document.getElementById('form2FA').style.display='block';
+        var c=document.getElementById('codigo2FA'); if(c){ c.value=''; c.focus(); }
+    }
+    function volverAPaso1(){
+        document.getElementById('form2FA').style.display='none';
+        document.getElementById('loginForm').style.display='block';
+        borrarPendiente2FA();
+        hideError();
+    }
+
+    function enviarCodigo2FA(sesion){
+        if(!sesion.email){ showError('⚠️ Este usuario no tiene un correo configurado, no se puede enviar el código de verificación.'); return; }
+        var codigo=generarCodigo6();
+        guardarPendiente2FA(sesion,codigo);
+        var msg=document.getElementById('msg2FA');
+        if(msg) msg.textContent='Enviando código a '+sesion.email+'...';
+        var datos=new URLSearchParams();
+        datos.set('token',NOTIF_TOKEN);
+        datos.set('destino',sesion.email);
+        datos.set('asunto','Código de acceso DISTRIMARKET');
+        datos.set('mensaje','Tu código para iniciar sesión en DISTRIMARKET es: '+codigo+'\n\nVence en 5 minutos. Si no fuiste tú quien intentó entrar, ignora este mensaje.');
+        fetch(NOTIF_ENDPOINT,{method:'POST',body:datos})
+            .then(function(r){ return r.json(); })
+            .then(function(r){
+                if(r.ok){ if(msg) msg.textContent='Te enviamos un código a '+sesion.email+'. Puede tardar un minuto en llegar.'; }
+                else { showError('❌ No se pudo enviar el código: '+(r.mensaje||'error desconocido')+'. Puedes cancelar e intentar más tarde.'); }
+            })
+            .catch(function(e){ showError('❌ No se pudo contactar el servidor de correo ('+e.message+'). Puedes cancelar e intentar más tarde.'); });
+    }
+
+    function verificarCodigo2FA(){
+        hideError();
+        var pend=leerPendiente2FA();
+        var codigo=(document.getElementById('codigo2FA').value||'').trim();
+        if(!pend){ showError('⚠️ El código ya venció. Cancela y vuelve a intentar.'); return; }
+        if(Date.now()>pend.expira){ showError('⚠️ El código ya venció (5 minutos). Cancela y vuelve a intentar.'); return; }
+        if(!codigo||codigo!==pend.codigo){ showError('❌ Código incorrecto.'); return; }
+        var b=document.getElementById('btnVerificar2FA'); if(b){ b.disabled=true; b.textContent='Entrando...'; }
+        borrarPendiente2FA();
+        setBoth(pend.sesion);
+        setTimeout(function(){ window.location.href='index.html'; },250);
+    }
+
     function doLogin(){
         hideError();
         var u=document.getElementById('loginUser').value, p=document.getElementById('loginPass').value, b=document.getElementById('loginBtn');
         if(!u||!p){ showError('⚠️ Escribe usuario y contraseña.'); return; }
+        var userKey=u.trim().toLowerCase();
+        var minRestante=minutosBloqueoRestante(userKey);
+        if(minRestante>0){ showError('🔒 Demasiados intentos fallidos. Intenta de nuevo en '+minRestante+' minuto(s).'); return; }
         var s=authenticate(u,p);
-        if(!s){ showError('❌ Usuario o contraseña incorrectos.'); return; }
+        if(!s){
+            registrarFallo(userKey);
+            var minAhora=minutosBloqueoRestante(userKey);
+            if(minAhora>0) showError('🔒 Demasiados intentos fallidos. Cuenta bloqueada '+minAhora+' minuto(s).');
+            else showError('❌ Usuario o contraseña incorrectos.');
+            return;
+        }
+        registrarExitoIntentos(userKey);
+        var cfgAv=configAvanzadoLogin();
+        if(cfgAv.seg2FA===true){
+            mostrarPaso2FA();
+            enviarCodigo2FA(s);
+            return;
+        }
         b.disabled=true; b.textContent='Entrando...';
         setBoth(s);
         setTimeout(function(){ window.location.href='index.html'; },250);
@@ -168,6 +295,25 @@ body.login-body{font-family:'Segoe UI',Tahoma,Geneva,Verdana,sans-serif;backgrou
 
         ensureDefault();
 
+        /* Si hay credenciales reales de Firebase, intenta traer en silencio la lista
+           real de usuarios ('usuariosSistema') desde la nube ANTES de que la persona
+           termine de escribir su clave. Antes esta pantalla nunca sincronizaba nada:
+           un celular que la abre por primera vez (p.ej. al pasar la app a cargar la
+           página en vivo en vez de los archivos empaquetados, donde el localStorage
+           queda vacío) solo tenía el usuario de respaldo admin/admin123 - nadie podía
+           entrar con su cuenta real hasta sincronizar manualmente desde otra pantalla,
+           a la que no se puede llegar sin haber iniciado sesión antes. Es "fire &
+           forget": si no hay internet o no hay credenciales de Firebase configuradas,
+           no pasa nada y sigue funcionando en modo local como siempre. */
+        try{
+            setTimeout(function(){
+                if(!window.FBConfig || typeof FBConfig.syncNow!=='function') return;
+                var cfg=FBConfig.getConfig();
+                if(!cfg||!cfg.apiKey||!cfg.projectId||!FBConfig.isSync()) return;
+                FBConfig.syncNow({pull:['usuariosSistema'],push:[]},function(){});
+            },1200);
+        }catch(e){}
+
         // ✅ Si hay sesión guardada: AVISO (no rebote). Si no: formulario limpio.
         var dm = parseObj(SESSION_KEY);
         if (dm) {
@@ -200,6 +346,27 @@ body.login-body{font-family:'Segoe UI',Tahoma,Geneva,Verdana,sans-serif;backgrou
         var link=document.getElementById('loginLogoLink'); if(link) link.addEventListener('click',function(e){ e.preventDefault(); if(window.LogoEmpresa&&typeof LogoEmpresa.openPicker==='function') LogoEmpresa.openPicker(); else alert('Gestor de logo no disponible (falta logo-empresa.js).'); });
 
         var esc=document.getElementById('loginEscape'); if(esc) esc.addEventListener('click',function(e){ e.preventDefault(); clearBoth(); location.reload(); });
+
+        // Paso 2FA (código por correo): se activa solo si el usuario/contraseña
+        // ya fueron validados (ver doLogin) y Configuración → Avanzado tiene
+        // "Autenticación de dos factores" activada.
+        var form2FA=document.getElementById('form2FA'); if(form2FA) form2FA.addEventListener('submit',function(e){ e.preventDefault(); verificarCodigo2FA(); });
+        var codigo2FA=document.getElementById('codigo2FA'); if(codigo2FA) codigo2FA.addEventListener('keydown',function(e){ if(e.key==='Enter'){ e.preventDefault(); verificarCodigo2FA(); } });
+
+        var reenviar=document.getElementById('reenviar2FA');
+        if(reenviar) reenviar.addEventListener('click',function(e){
+            e.preventDefault();
+            var pend=leerPendiente2FA();
+            if(!pend||!pend.sesion){ showError('⚠️ Ya no hay un código pendiente. Cancela y vuelve a intentar.'); return; }
+            if(reenviar.dataset.enviando==='1') return; // evita doble clic mientras se envía
+            reenviar.dataset.enviando='1';
+            var textoOriginal=reenviar.textContent;
+            reenviar.textContent='Enviando...';
+            enviarCodigo2FA(pend.sesion);
+            setTimeout(function(){ reenviar.dataset.enviando='0'; reenviar.textContent=textoOriginal; },3000);
+        });
+
+        var cancelar2FA=document.getElementById('cancelar2FA'); if(cancelar2FA) cancelar2FA.addEventListener('click',function(e){ e.preventDefault(); volverAPaso1(); });
 
         var list=getUsers(); var onlyDefault=list&&list.length===1&&list[0].usuario==='admin';
         var hint=document.getElementById('loginHint'); if(hint&&!onlyDefault) hint.style.display='none';
