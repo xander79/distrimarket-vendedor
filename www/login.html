@@ -131,7 +131,71 @@ body.login-body{font-family:'Segoe UI',Tahoma,Geneva,Verdana,sans-serif;backgrou
     function setUsers(a){ try{ localStorage.setItem(USERS_KEY,JSON.stringify(a)); }catch(e){} }
     function ensureDefault(){ var l=getUsers(); if(!l||!l.length){ l=[{usuario:'admin',email:'admin@distrimarket.com',password:'admin123',nombre:'Administrador',rol:'admin'}]; setUsers(l);} return l; }
 
-    function authenticate(u,p){ var l=ensureDefault(); u=String(u||'').trim(); p=String(p||''); if(!u||!p) return null; for(var i=0;i<l.length;i++){ var x=l[i]; var m=(x.usuario&&x.usuario.toLowerCase()===u.toLowerCase())||(x.email&&x.email.toLowerCase()===u.toLowerCase()); if(m&&x.password===p) return {email:x.email||u,nombre:x.nombre||x.usuario||u,rol:x.rol||'admin',usuario:x.usuario||u}; } return null; }
+    /* ---------------------------------------------------------------------
+       CONTRASEÑAS CON HASH (en vez de texto plano).
+       Antes 'password' se guardaba tal cual en localStorage y, al sincronizar
+       con la nube, viajaba en texto plano por Firestore - cualquiera con
+       acceso a la consola de Firebase o al localStorage del navegador podía
+       leer la clave real de cualquier usuario. Ahora se guarda como
+       passwordHash+passwordSalt (SHA-256 con sal aleatoria, vía Web Crypto,
+       disponible en cualquier navegador/WebView moderno sobre HTTPS). No es
+       cifrado de grado bancario, pero ya nadie puede leer la clave real con
+       solo mirar los datos guardados o sincronizados.
+       Las cuentas viejas que todavía tengan 'password' en texto plano siguen
+       funcionando igual (verificarPassword compara contra eso), y en el
+       momento en que esa persona inicia sesión con éxito, su cuenta se
+       "migra" sola a passwordHash y se borra el texto plano - sin que nadie
+       tenga que hacer nada a mano.
+    --------------------------------------------------------------------- */
+    function hashPassword(password, saltHex){
+        return new Promise(function(resolve, reject){
+            try{
+                if(!window.crypto||!window.crypto.subtle){ reject(new Error('Web Crypto no disponible')); return; }
+                var salt=saltHex;
+                if(!salt){
+                    var saltBytes=window.crypto.getRandomValues(new Uint8Array(16));
+                    salt=Array.prototype.map.call(saltBytes,function(b){ return b.toString(16).padStart(2,'0'); }).join('');
+                }
+                var data=new TextEncoder().encode(salt+':'+password);
+                window.crypto.subtle.digest('SHA-256', data).then(function(buf){
+                    var hashHex=Array.prototype.map.call(new Uint8Array(buf),function(b){ return b.toString(16).padStart(2,'0'); }).join('');
+                    resolve({salt:salt, hash:hashHex});
+                }).catch(reject);
+            }catch(e){ reject(e); }
+        });
+    }
+    function verificarPassword(password, user){
+        if(user.passwordHash && user.passwordSalt){
+            return hashPassword(password, user.passwordSalt).then(function(r){ return r.hash===user.passwordHash; }).catch(function(){ return false; });
+        }
+        // Cuenta vieja, todavía sin migrar: compara contra el texto plano como antes.
+        return Promise.resolve(!!user.password && user.password===password);
+    }
+
+    // Devuelve una Promise<usuario|null> (antes era síncrona; el hash obliga a que sea async).
+    function authenticate(u,p){
+        var l=ensureDefault();
+        u=String(u||'').trim(); p=String(p||'');
+        if(!u||!p) return Promise.resolve(null);
+        var match=null;
+        for(var i=0;i<l.length;i++){
+            var x=l[i];
+            var m=(x.usuario&&x.usuario.toLowerCase()===u.toLowerCase())||(x.email&&x.email.toLowerCase()===u.toLowerCase());
+            if(m){ match=x; break; }
+        }
+        if(!match) return Promise.resolve(null);
+        return verificarPassword(p, match).then(function(ok){
+            if(!ok) return null;
+            if(match.password && !match.passwordHash){
+                hashPassword(p).then(function(r){
+                    match.passwordHash=r.hash; match.passwordSalt=r.salt;
+                    delete match.password;
+                    setUsers(l);
+                }).catch(function(){ /* si falla la migración, la cuenta sigue funcionando en texto plano */ });
+            }
+            return {email:match.email||u,nombre:match.nombre||match.usuario||u,rol:match.rol||'admin',usuario:match.usuario||u};
+        });
+    }
 
     function showError(m){ var e=document.getElementById('loginError'); e.textContent=m; e.style.display='block'; }
     function hideError(){ var e=document.getElementById('loginError'); e.textContent=''; e.style.display='none'; }
@@ -240,24 +304,32 @@ body.login-body{font-family:'Segoe UI',Tahoma,Geneva,Verdana,sans-serif;backgrou
         var userKey=u.trim().toLowerCase();
         var minRestante=minutosBloqueoRestante(userKey);
         if(minRestante>0){ showError('🔒 Demasiados intentos fallidos. Intenta de nuevo en '+minRestante+' minuto(s).'); return; }
-        var s=authenticate(u,p);
-        if(!s){
-            registrarFallo(userKey);
-            var minAhora=minutosBloqueoRestante(userKey);
-            if(minAhora>0) showError('🔒 Demasiados intentos fallidos. Cuenta bloqueada '+minAhora+' minuto(s).');
-            else showError('❌ Usuario o contraseña incorrectos.');
-            return;
-        }
-        registrarExitoIntentos(userKey);
-        var cfgAv=configAvanzadoLogin();
-        if(cfgAv.seg2FA===true){
-            mostrarPaso2FA();
-            enviarCodigo2FA(s);
-            return;
-        }
-        b.disabled=true; b.textContent='Entrando...';
-        setBoth(s);
-        setTimeout(function(){ window.location.href='index.html'; },250);
+        // authenticate() ahora es asíncrona (compara contra un hash con Web Crypto).
+        if(b){ b.disabled=true; }
+        authenticate(u,p).then(function(s){
+            if(!s){
+                if(b) b.disabled=false;
+                registrarFallo(userKey);
+                var minAhora=minutosBloqueoRestante(userKey);
+                if(minAhora>0) showError('🔒 Demasiados intentos fallidos. Cuenta bloqueada '+minAhora+' minuto(s).');
+                else showError('❌ Usuario o contraseña incorrectos.');
+                return;
+            }
+            registrarExitoIntentos(userKey);
+            var cfgAv=configAvanzadoLogin();
+            if(cfgAv.seg2FA===true){
+                if(b) b.disabled=false;
+                mostrarPaso2FA();
+                enviarCodigo2FA(s);
+                return;
+            }
+            if(b){ b.disabled=true; b.textContent='Entrando...'; }
+            setBoth(s);
+            setTimeout(function(){ window.location.href='index.html'; },250);
+        }).catch(function(){
+            if(b) b.disabled=false;
+            showError('❌ Ocurrió un error al validar tus datos. Intenta de nuevo.');
+        });
     }
 
     // Muestra el aviso de sesión activa (sin redirigir)
