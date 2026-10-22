@@ -2120,7 +2120,29 @@ console.log('%c[vendedor] listo ✓','color:#10b981;font-weight:bold');
 setTimeout(intentarSyncSilenciosa,1500);
 setTimeout(reintentarAvisosPendientes,2500);
 setInterval(reintentarAvisosPendientes,120000);
-window.addEventListener('online',function(){setTimeout(reintentarAvisosPendientes,1000);});
+/* Antes, si el celular se quedaba sin señal justo cuando esta pantalla
+   intentó conectarse a Firebase por primera vez (por ejemplo, al abrir la
+   copia de respaldo sin internet -ver capacitor.config.ts/errorPath-),
+   "fbOnline" quedaba en falso PARA SIEMPRE en esa sesión: aunque el celular
+   recuperara señal después, nada volvía a intentar la conexión real, así
+   que un pedido tomado mientras tanto quedaba guardado solo en este
+   celular, sin ninguna forma de llegar a la nube hasta que el vendedor
+   cerrara y volviera a abrir la app. Ahora, en cuanto el navegador avisa
+   que volvió la señal (evento 'online'), si Firebase todavía no estaba
+   conectado se reintenta la conexión real (FBConfig.reconnect) y, apenas
+   conecta, se dispara la misma sincronización silenciosa de siempre -que
+   sube clientes/pedidos/visitas pendientes de este celular y baja lo nuevo
+   de la oficina- sin que el vendedor tenga que tocar nada. */
+window.addEventListener('online',function(){
+    setTimeout(reintentarAvisosPendientes,1000);
+    setTimeout(function(){
+        try{
+            if(!window.FBConfig) return;
+            if(FBConfig.isOnline()){ intentarSyncSilenciosa(); }
+            else { FBConfig.reconnect(function(ok){ if(ok) intentarSyncSilenciosa(); }); }
+        }catch(e){}
+    },1500);
+});
 }
 /* Al abrir la app, si ya hay nube configurada y activa, intenta traer lo nuevo de la
    oficina (catálogo/clientes) en silencio, sin molestar al vendedor con un error si no
