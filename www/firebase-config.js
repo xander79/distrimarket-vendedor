@@ -26,6 +26,17 @@ USO: cargar despues de compat.js (o de la capa embebida), al final del <body>:
         (se guardan en localStorage y se usan al recargar).
    ============================================================ */
 var DEFAULT_CFG = {
+    /* Credenciales reales del proyecto de Firebase (distrimarketat). Antes este
+       objeto estaba vacio y cada pagina dependia de que alguien hubiera guardado
+       las credenciales a mano con FBConfig.setCredentials(...), pero eso se
+       guarda en localStorage POR ORIGEN: lo que se guarda abriendo config.html
+       como archivo local (origen "file://", en el computador) nunca llega al
+       origen "https://app.distrimarketat.com" que carga el celular (son
+       almacenamientos completamente separados). Por eso el celular nunca tenia
+       credenciales aunque el computador ya estuviera "conectado". Con las
+       credenciales puestas aqui, CUALQUIER pagina que cargue este archivo -el
+       computador, el celular, cualquier equipo nuevo- se conecta sola, sin
+       depender de que alguien las haya pegado antes en ese equipo en particular. */
     apiKey: 'AIzaSyBi2azVYJyeEGCxuNRpM0IB5eenDLktn74',
     authDomain: 'distrimarketat.firebaseapp.com',
     projectId: 'distrimarketat',
@@ -126,6 +137,21 @@ var fbApp = null;     // instancia de firebase.initializeApp
 var fbDb = null;      // firestore()
 var fbOnline = false; // true solo si SDK cargo Y hay credenciales reales Y conecto
 var fbSync = false;   // espejo en la nube (off por defecto)
+/* Antes, si un write o un read a Firestore fallaba (por ejemplo por las reglas
+   de seguridad del proyecto, que es la causa más común de "activé la
+   sincronización en los dos equipos y aun así nunca llegó nada"), el error
+   quedaba totalmente escondido: cloudWrite lo tragaba en silencio y cloudRead
+   simplemente devolvía "no hay nada en la nube" como si la clave no
+   existiera. Así era imposible saber si el problema era de verdad "no hay
+   datos" o "Firestore está rechazando la operación". Ahora se guarda el
+   último error real (con su mensaje) para que Configuración → Avanzado lo
+   pueda mostrar tal cual, en vez de solo decir "activa/desactivada". */
+var fbUltimoError = null; // { key, accion:'push'|'pull', mensaje, fechaMs } o null
+function registrarErrorCloud(key, accion, e) {
+    var mensaje = (e && e.message) ? e.message : String(e || 'error desconocido');
+    fbUltimoError = { key: key, accion: accion, mensaje: mensaje, fechaMs: Date.now() };
+    logErr('fallo al ' + (accion === 'push' ? 'subir' : 'bajar') + ' "' + key + '": ' + mensaje);
+}
 
 function logOk(m) { try { console.log('%c[firebase-config] ' + m, 'color:#28a745;font-weight:bold'); } catch (e) {} }
 function logWarn(m) { try { console.warn('[firebase-config] ' + m); } catch (e) {} }
@@ -152,16 +178,6 @@ function loadFirebaseSDK() {
         return loadScript(urls[i]).catch(function () { return tryOne(i + 1); });
     }
     return tryOne(0).then(function () {
-        var authUrls = [
-            'https://www.gstatic.com/firebasejs/9.23.0/firebase-auth-compat.js',
-            'https://cdn.jsdelivr.net/npm/firebase@9.23.0/dist/compat/firebase-auth.js'
-        ];
-        function tryAuth(k) {
-            if (k >= authUrls.length) return Promise.reject(new Error('auth CDN fallo'));
-            return loadScript(authUrls[k]).catch(function () { return tryAuth(k + 1); });
-        }
-        return tryAuth(0);
-    }).then(function () {
         var fsUrls = [
             'https://www.gstatic.com/firebasejs/9.23.0/firebase-firestore-compat.js',
             'https://cdn.jsdelivr.net/npm/firebase@9.23.0/dist/compat/firebase-firestore.js'
@@ -171,6 +187,21 @@ function loadFirebaseSDK() {
             return loadScript(fsUrls[j]).catch(function () { return tryFs(j + 1); });
         }
         return tryFs(0);
+    }).then(function () {
+        // Carga tambien el SDK de Authentication: lo necesita el inicio de sesion
+        // anonimo de mas abajo (ver initFirebase), que es lo que hace que las
+        // reglas de seguridad de Firestore puedan exigir "solo si hay sesion" en
+        // vez de dejar la base de datos abierta a cualquiera que descubra esta
+        // configuracion.
+        var authUrls = [
+            'https://www.gstatic.com/firebasejs/9.23.0/firebase-auth-compat.js',
+            'https://cdn.jsdelivr.net/npm/firebase@9.23.0/dist/compat/firebase-auth.js'
+        ];
+        function tryAuth(k) {
+            if (k >= authUrls.length) return Promise.reject(new Error('auth CDN fallo'));
+            return loadScript(authUrls[k]).catch(function () { return tryAuth(k + 1); });
+        }
+        return tryAuth(0);
     });
 }
 
@@ -203,21 +234,44 @@ function initFirebase(cb) {
                 fbApp = window.firebase.app();
             }
             fbDb = window.firebase.firestore();
-            // autenticacion anonima: las reglas de Firestore exigen "request.auth != null",
-            // asi que sin esto NINGUNA lectura/escritura a la nube funcionaria (quedaria en localStorage).
-            // Si ya hay una sesion anonima guardada en este dispositivo, Firebase la reutiliza (no crea otra).
+            // Algunos computadores (por el antivirus, un firewall o una VPN de la
+            // red de la oficina) dejan pasar la conexion inicial pero bloquean el
+            // canal permanente que Firestore usa por defecto para leer/escribir
+            // (WebChannel) -eso se ve como "conectado" al principio y luego, al
+            // intentar leer o escribir algo real, "Failed to get document because
+            // the client is offline" una y otra vez, aunque internet si funcione
+            // bien para todo lo demas. autoDetectLongPolling hace que, cuando
+            // detecta ese bloqueo, Firestore cambie solo a una conexion mas
+            // compatible (parecida a como cargan las paginas normales) en vez de
+            // insistir con el canal que esa red esta bloqueando.
+            try {
+                fbDb.settings({ experimentalAutoDetectLongPolling: true, merge: true });
+            } catch (eSettings) { logWarn('no se pudo ajustar el modo de conexion de Firestore: ' + (eSettings && eSettings.message ? eSettings.message : eSettings)); }
+            // Inicia sesion anonima ANTES de tocar Firestore: las reglas de
+            // seguridad exigen "request.auth != null", asi que sin esto
+            // cualquier lectura/escritura sale con "Missing or insufficient
+            // permissions" aunque las credenciales del proyecto sean
+            // correctas (esta fue la causa real de que la sincronizacion
+            // nunca funcionara, en ningun equipo, desde siempre). El
+            // vendedor no ve nada de esto: es automatico y silencioso.
             window.firebase.auth().signInAnonymously().then(function () {
-                return fbDb.enableNetwork();
-            }).then(function () {
-                fbOnline = true;
-                fbSync = syncActivaPorDefecto();
-                logOk('conectado a Firestore (proyecto: ' + cfg.projectId + ', sesion anonima activa). Sincronizacion en nube: ' + (fbSync ? 'ACTIVA' : 'inactiva (desactivada manualmente en Configuración)') + '.');
-                if (fbSync) startMirror();
-                if (cb) cb(true, 'Conectado a Firestore (proyecto: ' + cfg.projectId + ').');
+                // ping de conexion
+                fbDb.enableNetwork().then(function () {
+                    fbOnline = true;
+                    fbSync = (window.FB_SYNC === true) || (readStoredSync() === true);
+                    logOk('conectado a Firestore (proyecto: ' + cfg.projectId + ', sesion anonima activa). Sincronizacion en nube: ' + (fbSync ? 'ACTIVA' : 'inactiva (solo lectura local)') + '.');
+                    if (fbSync) startMirror();
+                    autoBootstrapPull();
+                    if (cb) cb(true, 'Conectado a Firestore (proyecto: ' + cfg.projectId + ').');
+                }).catch(function (e) {
+                    fbOnline = false; var msg = 'No se pudo habilitar la red de Firestore: ' + (e && e.message ? e.message : e) + '.';
+                    logWarn(msg + ' Queda en modo localStorage.');
+                    if (cb) cb(false, msg);
+                });
             }).catch(function (e) {
-                fbOnline = false; var msg = 'No se pudo autenticar/habilitar la red de Firestore: ' + (e && e.message ? e.message : e) + '.';
-                logWarn(msg + ' Queda en modo localStorage.');
-                if (cb) cb(false, msg);
+                fbOnline = false; var msgA = 'No se pudo autenticar con Firebase (login anonimo): ' + (e && e.message ? e.message : e) + '.';
+                logErr(msgA + ' Queda en modo localStorage. Revisa que el metodo "Anonimo" este habilitado en Firebase Authentication.');
+                if (cb) cb(false, msgA);
             });
         } catch (e) {
             fbOnline = false; var msg2 = 'Error al inicializar Firebase: ' + (e && e.message ? e.message : e) + '.';
@@ -233,18 +287,6 @@ function initFirebase(cb) {
 
 function readStoredSync() {
     try { var v = localStorage.getItem('fbSync'); return v === null ? null : (v === 'true'); } catch (e) { return null; }
-}
-// La sincronizacion ahora queda ACTIVA por defecto en cuanto hay conexion real a Firebase.
-// Antes quedaba apagada mientras alguien no marcara la casilla "Activar sincronizacion en la
-// nube" en config.html -> eso funciona en la PC de oficina (su localStorage recuerda el check),
-// pero el celular del vendedor tiene su PROPIO localStorage, separado, y nunca pasa por esa
-// pantalla: para el, "fbSync" siempre estaba vacio y el boton "Sincronizar" se negaba a subir o
-// bajar nada ("La sincronizacion esta desactivada"). Con este cambio, cualquier equipo (PC o
-// celular) sincroniza apenas detecta credenciales reales; la unica forma de apagarla sigue
-// siendo explicita: destildar la casilla en config.html (guarda 'fbSync'='false') o usar
-// FBConfig.setSync(false).
-function syncActivaPorDefecto() {
-    return !(window.FB_SYNC === false || readStoredSync() === false);
 }
 
 /* ============================================================
@@ -265,8 +307,8 @@ function cloudWrite(key, value) {
         }, { merge: true }).then(function () {
             // recordamos que esta clave quedo al dia (asi no se vuelve a bajar como si fuera "nueva")
             var m = leerSyncMeta(); m[key] = m[key] || {}; m[key].lastPushMs = Date.now(); m[key].lastSyncMs = Date.now(); guardarSyncMeta(m);
-        }).catch(function (e) { /* silencioso: la copia local ya esta segura */ });
-    } catch (e) {}
+        }).catch(function (e) { registrarErrorCloud(key, 'push', e); /* la copia local ya esta segura de todas formas */ });
+    } catch (e) { registrarErrorCloud(key, 'push', e); }
 }
 function safeDocId(key) {
     // Firestore no permite / ni ciertos chars en doc id; los mapeamos
@@ -275,11 +317,7 @@ function safeDocId(key) {
 function startMirror() {
     // opcional: al conectar, subir una copia de las claves clave del sistema
     // (se hace en background y sin bloquear). Solo algunas para no saturar.
-    // 'empresaLogo'/'empresaNombre' se agregan aqui porque ya existian en el localStorage de la
-    // PC de oficina ANTES de que Firebase quedara conectado -nunca se habian subido a la nube-;
-    // asi, en cuanto la oficina conecta, empuja ese logo ya guardado para que el celular lo
-    // pueda bajar la proxima vez que sincronice (ver pull en vendedor.html).
-    var keys = ['user', 'clientes', 'productos', 'enviosLogistica', 'transportadorasLogistica', 'bodegasMulti', 'stockMulti', 'empresaLogo', 'empresaNombre'];
+    var keys = ['user', 'clientes', 'productos', 'enviosLogistica', 'transportadorasLogistica', 'bodegasMulti', 'stockMulti'];
     keys.forEach(function (k) {
         try {
             var raw = localStorage.getItem(k);
@@ -342,8 +380,8 @@ function cloudRead(key) {
                 var ms = 0;
                 try { ms = (data.updatedAt && typeof data.updatedAt.toMillis === 'function') ? data.updatedAt.toMillis() : 0; } catch (e2) {}
                 resolve({ value: data.value, updatedAtMs: ms });
-            }).catch(function () { resolve(null); });
-        } catch (e) { resolve(null); }
+            }).catch(function (e) { registrarErrorCloud(key, 'pull', e); resolve(null); });
+        } catch (e) { registrarErrorCloud(key, 'pull', e); resolve(null); }
     });
 }
 function pullKeys(keys) {
@@ -382,144 +420,42 @@ function pushKeys(keys) {
 }
 
 /* ============================================================
-   4-ter) NUMERACION DE FACTURAS - AJUSTE SEGURO DESDE LA NUBE
+   4-ter) ARRANQUE AUTOMATICO DESDE LA NUBE (bootstrap silencioso)
    ------------------------------------------------------------
-   'facturaCorrelativoLocal' es el contador que usa cada celular para
-   numerar sus facturas/remisiones (ver siguienteNumeroLocal() en
-   vendedor.html). El administrador puede "adelantar" este contador
-   desde config.html (por ejemplo, al retomar la numeracion donde se
-   quedo en Toma Pedidos). Para que ese ajuste llegue a TODOS los
-   celulares, se sincroniza como cualquier otra clave - pero con una
-   diferencia importante: un contador NUNCA debe retroceder (eso
-   repetiria un numero de factura que ese celular ya uso), asi que
-   solo se aplica el valor de la nube si es MAYOR al que ya hay aqui.
-   ============================================================ */
-function sincronizarConsecutivoFactura(cb) {
-    if (!fbOnline || !fbDb) { if (cb) cb(false); return; }
-    cloudRead('facturaCorrelativoLocal').then(function (remoto) {
-        if (!remoto || typeof remoto.value !== 'number') { if (cb) cb(false); return; }
-        var local = 0;
-        try { local = window.DB.get('facturaCorrelativoLocal', 0); } catch (e) {}
-        if (remoto.value > local) {
-            _aplicandoRemoto = true;
-            try { window.DB.set('facturaCorrelativoLocal', remoto.value); } finally { _aplicandoRemoto = false; }
-            if (cb) cb(true, remoto.value);
-        } else {
-            if (cb) cb(false);
-        }
-    }).catch(function () { if (cb) cb(false); });
-}
+   Antes de esto, un equipo o navegador que NUNCA habia abierto esta app
+   (un computador nuevo, o el mismo computador pero en OTRO navegador -por
+   ejemplo Chrome en vez del navegador de siempre-) arrancaba con
+   localStorage completamente vacio: sin clientes, sin productos, sin
+   logo, sin usuarios -como si fuera una empresa nueva desde cero-, aunque
+   en la nube ya hubiera toda la informacion real. Esto pasaba porque
+   localStorage es exclusivo de cada navegador: nunca se comparte solo.
 
-/* ============================================================
-   4-quater-bis) NUMERACION DE FACTURAS - BLOQUES ATOMICOS
-   ------------------------------------------------------------
-   sincronizarConsecutivoFactura (arriba) evita que el contador
-   RETROCEDA, pero no evita que DOS celulares reserven el MISMO
-   numero si generan una factura en el mismo instante sin haber
-   sincronizado entre si todavia (cada uno suma 1 a su propia copia
-   local, a ciegas).
-
-   Solucion real: en vez de "adivinar" el numero sumando 1 local,
-   cada celular le PIDE a Firestore un BLOQUE de numeros exclusivos
-   (ej: del 1900 al 1949) usando una transaccion atomica. Firestore
-   garantiza que si dos celulares piden un bloque al mismo tiempo,
-   cada uno recibe un rango distinto -nunca se solapan-. Mientras
-   tenga numeros libres en su bloque, el celular los reparte el
-   mismo localmente y sin internet (instantaneo, como antes). Solo
-   necesita conexion para pedir el SIGUIENTE bloque, no para cada
-   venta -por eso vendedor.html pide un bloque nuevo por adelantado
-   (en segundo plano, apenas hay señal) antes de que el que tiene se
-   le acabe.
-   ============================================================ */
-var BLOQUE_FACTURAS_TAMANO = 50;
-function reservarBloqueFactura(cb) {
-    if (!fbOnline || !fbDb) { if (cb) cb(null); return; }
+   Para que "abrir esta carpeta en cualquier navegador/computador" traiga
+   siempre lo ultimo real (sin tener que tocar ningun boton), cada vez que
+   una pagina se conecta a Firestore trae estas claves maestras. Si
+   encuentra algo mas nuevo que lo que hay localmente (o si no hay nada
+   local todavia), actualiza localStorage y recarga la pagina UNA sola vez
+   para que se vea de inmediato -el mismo patron que ya usa la app del
+   vendedor, pero generalizado a todas las paginas que cargan este
+   archivo-. Esto NO depende de que la sincronizacion este "activada" en
+   ese equipo (ese interruptor solo controla si ESTE equipo sube sus
+   propios cambios); traer lo que ya existe en la nube siempre es seguro. */
+var CLAVES_MAESTRAS = ['clientes', 'productos', 'vendedores', 'usuariosSistema', 'empresaLogo', 'empresaNombre'];
+function autoBootstrapPull() {
+    if (window.DM_SKIP_AUTOBOOTSTRAP) return; // paginas que ya manejan su propio refresco (ej. vendedor.html)
     try {
-        var ref = fbDb.collection('contadores_distrimarket').doc('facturas');
-        fbDb.runTransaction(function (tx) {
-            return tx.get(ref).then(function (doc) {
-                var actual = (doc.exists && typeof doc.data().siguienteDisponible === 'number') ? doc.data().siguienteDisponible : 1;
-                var nuevo = actual + BLOQUE_FACTURAS_TAMANO;
-                tx.set(ref, { siguienteDisponible: nuevo, actualizado: window.firebase.firestore.FieldValue.serverTimestamp() }, { merge: true });
-                return { desde: actual, hasta: nuevo - 1 };
-            });
-        }).then(function (bloque) { if (cb) cb(bloque); })
-          .catch(function (e) { console.warn('[firebase-config] no se pudo reservar bloque de facturas:', e); if (cb) cb(null); });
-    } catch (e) { if (cb) cb(null); }
-}
-// Lo usa config.html al "Aplicar ajuste": fija el punto de partida EXACTO del
-// contador atomico (ej: 1897), para que el primer bloque que pida cualquier
-// celular arranque justo despues de ese numero.
-function fijarContadorGlobalFactura(valor, cb) {
-    if (!fbOnline || !fbDb) { if (cb) cb(false); return; }
-    try {
-        fbDb.collection('contadores_distrimarket').doc('facturas').set({
-            siguienteDisponible: valor + 1,
-            actualizado: window.firebase.firestore.FieldValue.serverTimestamp()
-        }, { merge: true }).then(function () { if (cb) cb(true); }).catch(function () { if (cb) cb(false); });
-    } catch (e) { if (cb) cb(false); }
-}
-
-/* ============================================================
-   4-quater) CONTROL DE RUTA DEL VENDEDOR (en vivo + historial)
-   ------------------------------------------------------------
-   Coleccion aparte, 'rutas_vendedores', con un documento por vendedor
-   (id = vendedorId), para que dos vendedores en ruta al mismo tiempo
-   no se pisen el uno al otro (a diferencia del espejo generico por
-   clave, que comparte un solo documento por clave entre todos).
-   Campos: vendedorId, vendedorNombre, inicio, fin,
-   ultimaUbicacion:{lat,lng,hora}, recorridoHoy:[{lat,lng,hora},...].
-   ============================================================ */
-function refRutaVendedor(vendedorId) {
-    return fbDb.collection('rutas_vendedores').doc(safeDocId(String(vendedorId)));
-}
-function iniciarRutaNube(vendedorId, vendedorNombre, inicioISO, cb) {
-    if (!fbOnline || !fbDb || !vendedorId) { if (cb) cb(false); return; }
-    try {
-        refRutaVendedor(vendedorId).set({
-            vendedorId: vendedorId, vendedorNombre: vendedorNombre || '',
-            inicio: inicioISO, fin: null, recorridoHoy: [],
-            ultimaUbicacion: null,
-            actualizado: window.firebase.firestore.FieldValue.serverTimestamp()
-        }).then(function () { if (cb) cb(true); }).catch(function () { if (cb) cb(false); });
-    } catch (e) { if (cb) cb(false); }
-}
-function terminarRutaNube(vendedorId, finISO, cb) {
-    if (!fbOnline || !fbDb || !vendedorId) { if (cb) cb(false); return; }
-    try {
-        refRutaVendedor(vendedorId).set({
-            fin: finISO, actualizado: window.firebase.firestore.FieldValue.serverTimestamp()
-        }, { merge: true }).then(function () { if (cb) cb(true); }).catch(function () { if (cb) cb(false); });
-    } catch (e) { if (cb) cb(false); }
-}
-function enviarUbicacionVendedor(vendedorId, vendedorNombre, lat, lng, cb) {
-    if (!fbOnline || !fbDb || !vendedorId) { if (cb) cb(false); return; }
-    try {
-        var punto = { lat: lat, lng: lng, hora: new Date().toISOString() };
-        refRutaVendedor(vendedorId).set({
-            vendedorId: vendedorId, vendedorNombre: vendedorNombre || '',
-            ultimaUbicacion: punto,
-            recorridoHoy: window.firebase.firestore.FieldValue.arrayUnion(punto),
-            actualizado: window.firebase.firestore.FieldValue.serverTimestamp()
-        }, { merge: true }).then(function () { if (cb) cb(true); }).catch(function () { if (cb) cb(false); });
-    } catch (e) { if (cb) cb(false); }
-}
-function leerRutaVendedor(vendedorId, cb) {
-    if (!fbOnline || !fbDb || !vendedorId) { if (cb) cb(null); return; }
-    try {
-        refRutaVendedor(vendedorId).get().then(function (doc) {
-            cb(doc.exists ? doc.data() : null);
-        }).catch(function () { cb(null); });
-    } catch (e) { cb(null); }
-}
-function leerTodasLasRutasHoy(cb) {
-    if (!fbOnline || !fbDb) { if (cb) cb([]); return; }
-    try {
-        fbDb.collection('rutas_vendedores').get().then(function (snap) {
-            var arr = []; snap.forEach(function (d) { arr.push(d.data()); });
-            cb(arr);
-        }).catch(function () { cb([]); });
-    } catch (e) { cb([]); }
+        pullKeys(CLAVES_MAESTRAS).then(function (resultados) {
+            var actualizadas = resultados.filter(function (r) { return r.estado === 'actualizado_desde_la_nube'; });
+            if (!actualizadas.length) return;
+            var yaRecargo = false;
+            try { yaRecargo = sessionStorage.getItem('__dmBootstrapReload') === '1'; } catch (e) {}
+            var claves = actualizadas.map(function (r) { return r.key; }).join(', ');
+            if (yaRecargo) { logOk('datos de la nube actualizados en segundo plano (' + claves + '); se veran en la proxima carga.'); return; }
+            try { sessionStorage.setItem('__dmBootstrapReload', '1'); } catch (e) {}
+            logOk('trayendo datos reales de la nube al abrir por primera vez en este navegador (' + claves + '). Recargando...');
+            location.reload();
+        }).catch(function (e) { logWarn('no se pudo revisar si habia datos nuevos en la nube: ' + (e && e.message ? e.message : e)); });
+    } catch (e) {}
 }
 
 // "envuelve" DB.set para hacer write-through sin romper la API existente
@@ -546,30 +482,6 @@ function currentUser() {
 }
 
 /* ============================================================
-   5-bis) TOKEN DE NOTIFICACIONES PUSH DEL VENDEDOR
-   ------------------------------------------------------------
-   Cuando el celular del vendedor se registra para recibir
-   notificaciones push (productos nuevos, cambios de precio,
-   ofertas), su "token" de celular se guarda aqui, en Firestore,
-   coleccion vendedor_tokens (un documento por celular, el id del
-   documento es el propio token). Asi, push.php (en Hostinger)
-   puede leer esta lista y mandarle la notificacion a cada celular.
-   ============================================================ */
-function guardarTokenPush(obj) {
-    return new Promise(function (resolve) {
-        if (!fbOnline || !fbDb) { resolve(false); return; }
-        try {
-            fbDb.collection('vendedor_tokens').doc(String(obj.token)).set({
-                token: obj.token,
-                vendedorId: obj.vendedorId || '',
-                vendedorNombre: obj.vendedorNombre || '',
-                actualizado: window.firebase.firestore.FieldValue.serverTimestamp()
-            }, { merge: true }).then(function () { resolve(true); }).catch(function () { resolve(false); });
-        } catch (e) { resolve(false); }
-    });
-}
-
-/* ============================================================
    6) API PUBLICA: window.FBConfig
    ============================================================ */
 window.FBConfig = {
@@ -592,26 +504,24 @@ window.FBConfig = {
         try { localStorage.setItem('fbSync', on ? 'true' : 'false'); window.FB_SYNC = !!on; logOk('sincronizacion en nube: ' + (on ? 'ACTIVA' : 'DESACTIVADA') + '. Recarga para aplicar.'); try { Notif.success('Sincronizacion ' + (on ? 'activada' : 'desactivada') + '. Recarga la pagina.'); } catch (e) {} return true; } catch (e) { return false; }
     },
     isOnline: function () { return fbOnline; },
-    // Antes devolvía la variable fbSync directamente, pero esa variable solo se actualiza
-    // DESPUÉS de que termine de conectar a Firebase (eso es asíncrono - carga el SDK desde
-    // internet, autentica, etc., y en el celular con mala señal puede tardar varios segundos).
-    // Si el botón "Sincronizar" se toca justo al abrir la app, antes de que eso termine,
-    // isSync() todavía devolvía su valor inicial (false) aunque la sincronización SÍ estuviera
-    // activada - el mismo error de "carrera" que ya se corrigió en el sistema de oficina.
-    // syncActivaPorDefecto() no depende de la conexión: solo lee lo guardado en este celular,
-    // así que da la respuesta correcta de inmediato, se haya conectado Firebase o no todavía.
-    isSync: function () { return syncActivaPorDefecto(); },
-    sincronizarConsecutivoFactura: sincronizarConsecutivoFactura,
-    reservarBloqueFactura: reservarBloqueFactura,
-    fijarContadorGlobalFactura: fijarContadorGlobalFactura,
-    iniciarRutaNube: iniciarRutaNube,
-    terminarRutaNube: terminarRutaNube,
-    enviarUbicacionVendedor: enviarUbicacionVendedor,
-    leerRutaVendedor: leerRutaVendedor,
-    leerTodasLasRutasHoy: leerTodasLasRutasHoy,
+    // El último error real de Firestore (push o pull), o null si nunca ha fallado
+    // uno desde que se cargó la página. Úsalo para mostrar la causa real (por
+    // ejemplo "Missing or insufficient permissions" = las reglas de seguridad de
+    // Firestore están bloqueando la escritura/lectura) en vez de solo "no sincronizó".
+    ultimoError: function () { return fbUltimoError; },
+    // Lee primero lo que el usuario guardó (localStorage), no solo la variable en memoria.
+    // La variable fbSync solo se actualiza DESPUÉS de que Firestore termine de conectar
+    // (eso es asíncrono - tarda un instante). Si una pantalla pregunta "¿está activa la
+    // sincronización?" justo al cargar la página (antes de que termine esa conexión), fbSync
+    // todavía tiene su valor por defecto (false), aunque el usuario ya la haya activado y eso
+    // esté guardado en localStorage. Por eso el checkbox de Configuración se recargaba y
+    // volvía a aparecer destildado: estaba leyendo la variable vieja, no lo guardado.
+    isSync: function () {
+        var guardado = readStoredSync();
+        return guardado !== null ? guardado : fbSync;
+    },
     getConfig: function () { return mergeCfg(); },
     currentUser: currentUser,
-    guardarTokenPush: guardarTokenPush,
     // fuerza un re-chequeo (util tras pegar credenciales). cb(ok, mensaje) opcional: avisa el resultado real.
     reconnect: function (cb) { fbOnline = false; fbDb = null; fbApp = null; initFirebase(cb); },
     // Sincronizacion real en dos sentidos. opts: { pull:[claves a traer de la nube si son mas nuevas],

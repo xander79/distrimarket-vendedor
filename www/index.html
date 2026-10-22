@@ -31,6 +31,24 @@ window.Format={money:function(n){n=Number(n)||0;return '$'+n.toLocaleString('es-
 console.log('%c[vendedor] capa OK','color:#10b981;font-weight:bold');
 })();
 </script>
+<script>
+/* ===== Control de acceso: exige sesión antes de mostrar la app =====
+   Antes esta página se abría directo (sin pedir usuario ni clave) porque
+   ningún archivo de la app nunca comprobaba si había una sesión -login.html
+   existía y funcionaba, pero nada apuntaba hacia allá-. Ahora, si no hay una
+   sesión guardada (la misma que deja login.html al validar contra
+   Configuración → Usuarios), se manda derecho a login.html antes de pintar
+   nada. El resto de esta página ni se ejecuta (el throw detiene el script). */
+(function requiereSesion(){
+    var sesion=null;
+    try{ sesion=window.DB.get('user', null); }catch(e){}
+    var valida = !!(sesion && typeof sesion==='object' && (sesion.usuario||sesion.nombre||sesion.email));
+    if(!valida){
+        window.location.replace('login.html');
+        throw new Error('[vendedor] sin sesión activa, redirigiendo a login.html');
+    }
+})();
+</script>
 <style>
 :root{
 --bg:#eef1f7;--card:#ffffff;--ink:#16202e;--ink2:#64748b;--line:#e5e9f0;
@@ -1114,14 +1132,14 @@ function aplicarLogoEmpresa(){
 function seed(){
 if(productos.length===0){
 productos=[
-{id:'P1',codigo:'001',nombre:'Arroz 1kg',precio:4200,icono:'🍚',stock:50,cat:'Abarrotes'},
-{id:'P2',codigo:'002',nombre:'Aceite 900ml',precio:9800,icono:'🛢️',stock:30,cat:'Abarrotes'},
-{id:'P3',codigo:'003',nombre:'Azúcar 1kg',precio:3500,icono:'🍬',stock:40,cat:'Abarrotes'},
-{id:'P4',codigo:'004',nombre:'Leche 1L',precio:3200,icono:'🥛',stock:60,cat:'Lácteos'},
-{id:'P5',codigo:'005',nombre:'Pan integral',precio:4500,icono:'🍞',stock:25,cat:'Panadería'},
-{id:'P6',codigo:'006',nombre:'Huevos x12',precio:8500,icono:'🥚',stock:35,cat:'Lácteos'},
-{id:'P7',codigo:'007',nombre:'Café 500g',precio:14500,icono:'☕',stock:18,cat:'Abarrotes'},
-{id:'P8',codigo:'008',nombre:'Gaseosa 1.5L',precio:5200,icono:'🥤',stock:48,cat:'Bebidas'}
+{id:'P1',codigo:'001',nombre:'Arroz 1kg',precio:4200,icono:'🍚',stock:50,categoria:'Abarrotes',fabricante:'',iva:19,estado:'activo'},
+{id:'P2',codigo:'002',nombre:'Aceite 900ml',precio:9800,icono:'🛢️',stock:30,categoria:'Abarrotes',fabricante:'',iva:19,estado:'activo'},
+{id:'P3',codigo:'003',nombre:'Azúcar 1kg',precio:3500,icono:'🍬',stock:40,categoria:'Abarrotes',fabricante:'',iva:19,estado:'activo'},
+{id:'P4',codigo:'004',nombre:'Leche 1L',precio:3200,icono:'🥛',stock:60,categoria:'Lácteos',fabricante:'',iva:19,estado:'activo'},
+{id:'P5',codigo:'005',nombre:'Pan integral',precio:4500,icono:'🍞',stock:25,categoria:'Panadería',fabricante:'',iva:19,estado:'activo'},
+{id:'P6',codigo:'006',nombre:'Huevos x12',precio:8500,icono:'🥚',stock:35,categoria:'Lácteos',fabricante:'',iva:19,estado:'activo'},
+{id:'P7',codigo:'007',nombre:'Café 500g',precio:14500,icono:'☕',stock:18,categoria:'Abarrotes',fabricante:'',iva:19,estado:'activo'},
+{id:'P8',codigo:'008',nombre:'Gaseosa 1.5L',precio:5200,icono:'🥤',stock:48,categoria:'Bebidas',fabricante:'',iva:19,estado:'activo'}
 ];
 DB.set('productos',productos);
 }
@@ -1420,18 +1438,25 @@ pintarPedidos();
 Notif.success('↩️ Devolución registrada');
 }
 
+/* Solo se muestran productos activos -- un producto marcado como "no activo"
+   desde Productos.html ya no debe aparecer para que el vendedor lo venda.
+   Igual que en POS Móvil y Tienda Online: p.estado==='activo' (Productos.html
+   y el Importador siempre guardan este campo, por defecto 'activo'). */
+function productosActivos(){
+return productos.filter(function(p){return p.estado==='activo';});
+}
 function renderProductos(q){
-q=norm(q||'');var r=productos;
-if(q)r=productos.filter(function(p){return norm(p.nombre).indexOf(q)>=0||norm(p.codigo).indexOf(q)>=0;});
+q=norm(q||'');var r=productosActivos();
+if(q)r=r.filter(function(p){return norm(p.nombre).indexOf(q)>=0||norm(p.codigo).indexOf(q)>=0;});
 var g=$('pgrid');
 if(!r.length){g.innerHTML='<div class="empty" style="grid-column:1/-1"><div class="e">📦</div><p>Sin productos</p></div>';return;}
-g.innerHTML=r.map(function(p){var out=p.stock<=0;return '<div class="pcard '+(out?'out':'')+'" data-act="addProd" data-id="'+p.id+'"><button class="add" data-act="addProd" data-id="'+p.id+'">+</button><div class="emo">'+(p.icono||'📦')+'</div><div class="nm">'+p.nombre+'</div><div class="pr">'+Format.money(precioBaseProd(p))+'</div><div class="stk">'+(out?'Sin stock':'Stock '+p.stock)+'</div></div>';}).join('');
+g.innerHTML=r.map(function(p){var out=p.stock<=0;var cat=p.categoria||p.cat||'';var fab=p.fabricante||'';var sub=[cat,fab].filter(Boolean).join(' · ');return '<div class="pcard '+(out?'out':'')+'" data-act="addProd" data-id="'+p.id+'"><button class="add" data-act="addProd" data-id="'+p.id+'">+</button><div class="emo">'+(p.icono||'📦')+'</div><div class="nm">'+p.nombre+'</div>'+(sub?'<div class="cat" style="font-size:11px;color:#8a8f98;">'+sub+'</div>':'')+'<div class="pr">'+Format.money(precioBaseProd(p))+'</div><div class="stk">'+(out?'Sin stock':'Stock '+p.stock)+'</div></div>';}).join('');
 }
 function buscarProductosAC(q,cont){
 q=norm(q);if(!q){cont.classList.remove('show');cont.innerHTML='';return;}
-var r=productos.filter(function(p){return norm(p.nombre).indexOf(q)>=0||norm(p.codigo).indexOf(q)>=0;}).slice(0,8);
+var r=productosActivos().filter(function(p){return norm(p.nombre).indexOf(q)>=0||norm(p.codigo).indexOf(q)>=0;}).slice(0,8);
 if(!r.length){cont.innerHTML='<div class="ac-empty">Sin productos</div>';cont.classList.add('show');return;}
-cont.innerHTML=r.map(function(p){return '<div class="ac-item" data-act="addProd" data-id="'+p.id+'"><span class="nm">'+p.icono+' '+p.nombre+'</span><span class="mt">'+Format.money(precioBaseProd(p))+'</span></div>';}).join('');
+cont.innerHTML=r.map(function(p){var cat=p.categoria||p.cat||'';return '<div class="ac-item" data-act="addProd" data-id="'+p.id+'"><span class="nm">'+p.icono+' '+p.nombre+(cat?' <small style="color:#8a8f98;">('+cat+')</small>':'')+'</span><span class="mt">'+Format.money(precioBaseProd(p))+'</span></div>';}).join('');
 cont.classList.add('show');
 }
 function addProd(id){
@@ -1485,7 +1510,7 @@ function parseComandoVoz(texto){
 }
 function buscarProductoPorNombre(texto){
     var t=_normTxt(texto);if(!t)return null;
-    var candidatos=productos.filter(function(p){var n=_normTxt(p.nombre);return n.indexOf(t)!==-1||t.indexOf(n)!==-1;});
+    var candidatos=productosActivos().filter(function(p){var n=_normTxt(p.nombre);return n.indexOf(t)!==-1||t.indexOf(n)!==-1;});
     if(!candidatos.length)return null;
     candidatos.sort(function(a,b){return _normTxt(a.nombre).length-_normTxt(b.nombre).length;});
     return candidatos[0];
@@ -1524,7 +1549,7 @@ function pedirPorCamara(){
             var codigos=(res&&res.barcodes)||[];
             if(!codigos.length){Notif.warning('No se detectó ningún código.');return;}
             var valor=codigos[0].rawValue||codigos[0].displayValue||'';
-            var prod=productos.find(function(p){return p.barras&&String(p.barras).trim()===String(valor).trim();});
+            var prod=productosActivos().find(function(p){return p.barras&&String(p.barras).trim()===String(valor).trim();});
             if(!prod){Notif.warning('Código escaneado ('+valor+') pero ningún producto tiene ese código de barras registrado. Pídele al administrador que lo agregue en Productos.');return;}
             if(agregarCantidadProd(prod.id,1))Notif.success('📷 Agregado por cámara: '+prod.nombre);
         }catch(e){console.warn('[vendedor] error escaneando código:',e);Notif.error('⚠️ No se pudo usar la cámara: '+(e&&e.message?e.message:e));}
@@ -1918,11 +1943,25 @@ function sync(){
             return;
         }
         try{recargarDatosLocales();aplicarLogoEmpresa();}catch(e){console.warn('[vendedor] la sincronización fue real, pero repintar la pantalla falló:',e);}
-        var bajaron=(res.pull||[]).filter(function(r){return r.estado==='actualizado_desde_la_nube';}).length;
-        var subieron=(res.push||[]).filter(function(r){return r.estado==='subido';}).length;
+        var bajaron=(res.pull||[]).filter(function(r){return r.estado==='actualizado_desde_la_nube';});
+        var subieron=(res.push||[]).filter(function(r){return r.estado==='subido';});
+        var sinNube=(res.pull||[]).filter(function(r){return r.estado==='sin_datos_en_la_nube';});
         var errores=(res.pull||[]).concat(res.push||[]).filter(function(r){return r.estado==='error';});
-        if(errores.length) Notif.warning('Sincronizado con '+errores.length+' error(es) · '+bajaron+' actualizado(s), '+subieron+' subido(s).');
-        else Notif.success('🔄 Sincronizado de verdad · '+bajaron+' actualizado(s) de la oficina, '+subieron+' subido(s) a la nube.');
+        /* Antes solo se mostraba "N error(es)" sin decir cuál era el error real -eso
+           escondía justo la pista que hacía falta (por ejemplo, un rechazo de permisos
+           de Firestore). Ahora se muestra el mensaje real de cada clave que falló. */
+        if(errores.length){
+            var detalle=errores.map(function(r){return r.key+': '+(r.error||'error desconocido');}).join(' · ');
+            Notif.warning('⚠️ Falló para '+errores.length+' clave(s) — '+detalle);
+        } else if(sinNube.length && !bajaron.length){
+            // Esto es lo que se ve cuando "estaba marcada" la sincronización en ambos
+            // equipos pero aun así nunca llegaron los clientes: Firestore respondió
+            // bien (no hubo error), simplemente nunca hubo nada guardado ahí todavía
+            // para esas claves -o sea, la oficina nunca llegó a subirlas de verdad-.
+            Notif.warning('🔄 Sin errores, pero la nube no tiene todavía: '+sinNube.map(function(r){return r.key;}).join(', ')+'. Verifica en el computador que la sincronización haya subido esos datos (Configuración → Avanzado → "Probar sincronización ahora").');
+        } else {
+            Notif.success('🔄 Sincronizado de verdad · '+bajaron.length+' actualizado(s) de la oficina, '+subieron.length+' subido(s) a la nube.');
+        }
         /* Si el administrador ajustó el consecutivo de facturas desde Configuración,
            este celular lo recoge aquí mismo (nunca retrocede el contador). */
         if(typeof FBConfig.sincronizarConsecutivoFactura==='function'){
@@ -2004,7 +2043,15 @@ case 'sync': sync(); break;
 case 'toggleDark': toggleDark(); break;
 case 'guardarMeta': meta=parseInt($('metaInput').value)||5000000;DB.set('metaV',meta);pintarMetas();pintarDashboard();Notif.success('Meta guardada'); break;
 case 'reset': if(confirm('¿Borrar TODOS los datos?')){localStorage.clear();location.reload();} break;
-case 'logout': if(confirm('¿Cerrar sesión?'))location.href='login.html'; break;
+case 'logout': if(confirm('¿Cerrar sesión?')){
+    /* Antes esto solo mandaba a login.html sin borrar nada -como la sesión
+       quedaba guardada, login.html mostraba "continuar como [nombre]" y con
+       un toque se volvía a entrar sin pedir la clave otra vez. Ahora sí se
+       borra la sesión real (las dos claves que usa login.html) para que
+       "cerrar sesión" signifique eso de verdad. */
+    try{ localStorage.removeItem('dm_user'); localStorage.removeItem('user'); }catch(e){}
+    location.href='login.html';
+} break;
 case 'closeModal': $('modalHist').classList.remove('on'); break;
 case 'marcarEntregado': marcarEntregado(id); break;
 case 'abrirDevolucion': abrirDevolucion(id); break;
@@ -2141,7 +2188,13 @@ function registrarPushSiAplica(){
 document.addEventListener('DOMContentLoaded',init);
 document.addEventListener('DOMContentLoaded',function(){setTimeout(registrarPushSiAplica,1500);});
 </script>
-<script src="firebase-config.js"></script>
+<script>
+/* Esta pantalla ya trae sus propios datos de la nube con su propio aviso
+   y refresco (ver sync()/intentarSyncSilenciosa() mas abajo), asi que no
+   necesita el recargado automatico generico de firebase-config.js. */
+window.DM_SKIP_AUTOBOOTSTRAP = true;
+</script>
+<script src="firebase-config.js?v=5"></script>
 <script src="logo-empresa.js"></script>
 </body>
 </html>
